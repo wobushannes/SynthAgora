@@ -32,6 +32,7 @@ class Config:
     MODERATORS_FOLDER = "moderators"
     EXAMPLES_FOLDER = "examples"
     EXPORTS_FOLDER = "exports"
+    MEMORY_FOLDER = "memory"  # NEU
     
     # UI Farben
     BG_MAIN = "#1a1a1a"
@@ -68,6 +69,7 @@ class Config:
             cls.MODERATORS_FOLDER = folders.get("moderators", cls.MODERATORS_FOLDER)
             cls.EXAMPLES_FOLDER = folders.get("examples", cls.EXAMPLES_FOLDER)
             cls.EXPORTS_FOLDER = folders.get("exports", cls.EXPORTS_FOLDER)
+            cls.MEMORY_FOLDER = folders.get("memory", cls.MEMORY_FOLDER)
             
             return True
         except:
@@ -79,7 +81,8 @@ Config.load_from_file()
 class FileManager:
     def __init__(self):
         for folder in [Config.AGENTS_FOLDER, Config.MODERATORS_FOLDER, 
-                       Config.EXAMPLES_FOLDER, Config.EXPORTS_FOLDER]:
+                       Config.EXAMPLES_FOLDER, Config.EXPORTS_FOLDER,
+                       Config.MEMORY_FOLDER]:  # NEU
             if not os.path.exists(folder):
                 os.makedirs(folder)
     
@@ -154,7 +157,7 @@ class LMStudio:
             self.stats["errors"] += 1
             return f"[Fehler: {str(e)[:30]}]"
 
-# ===================== AGENT MIT GEDÄCHTNIS =====================
+# ===================== AGENT MIT GEDÄCHTNIS & LERNEN =====================
 class Agent:
     def __init__(self, data: dict):
         self.name = data["name"]
@@ -168,55 +171,86 @@ class Agent:
         
         self.mood = "neutral"
         self.energy = 100
-        self.arguments = []  # Alle eigenen Argumente
+        self.arguments = []
         self.last_response = ""
         
-        # NEU: Gedächtnis für Wiederholungen
-        self.schon_gesagtes = []  # Speichert alle eigenen Aussagen
+        # Kurzzeitgedächtnis
+        self.schon_gesagtes = []
         self.wiederholungen = 0
-        self.ausgeschlossen = False  # Wird true bei zu vielen Wiederholungen
+        self.ausgeschlossen = False
+        
+        # NEU: Langzeitgedächtnis
+        self.learned_facts = []
+        self.known_positions = {}
+        self.memory_file = f"{Config.MEMORY_FOLDER}/{self.name}.json"
+        self.load_memory()
+    
+    # NEU: Memory-Funktionen
+    def load_memory(self):
+        """Frühere Diskussionen laden"""
+        try:
+            with open(self.memory_file, 'r', encoding='utf-8') as f:
+                memory = json.load(f)
+                self.learned_facts = memory.get('facts', [])
+                self.known_positions = memory.get('positions', {})
+        except:
+            self.learned_facts = []
+            self.known_positions = {}
+    
+    def save_memory(self):
+        """Wissen speichern"""
+        try:
+            with open(self.memory_file, 'w', encoding='utf-8') as f:
+                json.dump({
+                    'facts': self.learned_facts[-50:],
+                    'positions': self.known_positions
+                }, f, indent=2, ensure_ascii=False)
+        except:
+            pass
     
     def answer(self, topic: str, document: Optional[str], 
                lm: LMStudio, stop_event: threading.Event = None) -> str:
         if stop_event and stop_event.is_set():
             return "[ABGEBROCHEN]"
         
-        # Prüfen ob Agent bereits ausgeschlossen
         if self.ausgeschlossen:
             return "[AUSGESCHLOSSEN]"
         
         # Basis-Prompt
-        if document and document.strip():
-            base_prompt = f"""Du bist {self.name}, {self.role}.
+        base_prompt = f"""Du bist {self.name}, {self.role}.
 
 Charakter: {self.personality}
 Bildung: {self.education}
 Hintergrund: {self.background}
 
-Thema: {topic}
+Thema: {topic}"""
 
-Dokument/Kontext:
-{document[:500]}
-
-Was ist deine Position zu diesem Thema?"""
-        else:
-            base_prompt = f"""Du bist {self.name}, {self.role}.
-
-Charakter: {self.personality}
-Bildung: {self.education}
-Hintergrund: {self.background}
-
-Thema: {topic}
-
-Was ist deine Position zu diesem Thema?"""
+        # NEU: Vorwissen einbauen
+        if self.learned_facts:
+            base_prompt += f"\n\nWas du aus früheren Diskussionen gelernt hast:\n"
+            for fact in self.learned_facts[-3:]:
+                base_prompt += f"- {fact}\n"
         
-        # NEU: Gedächtnis-Check
+        # NEU: Dokument besser verarbeiten
+        if document and document.strip():
+            chunks = [document[i:i+400] for i in range(0, len(document), 400)]
+            doc_insights = []
+            for chunk in chunks[:2]:
+                insight = lm.ask(f"Fasse den Kern dieser Passage in 1 Satz zusammen: {chunk}")
+                if insight and insight != "[ABGEBROCHEN]":
+                    doc_insights.append(insight)
+            
+            base_prompt += f"\n\nDokument-Kernaussagen:\n"
+            for insight in doc_insights:
+                base_prompt += f"- {insight}\n"
+        
+        # Kurzzeitgedächtnis
         if self.schon_gesagtes:
-            letzte_beitraege = self.schon_gesagtes[-3:]  # Letzte 3 Beiträge
+            letzte_beitraege = self.schon_gesagtes[-3:]
             beitrags_history = "\n".join([f"- {b}" for b in letzte_beitraege])
             
             base_prompt += f"""
-
+            
 Deine letzten Beiträge:
 {beitrags_history}
 
@@ -227,23 +261,33 @@ Antworte in 1-2 Sätzen."""
         
         response = lm.ask(base_prompt, f"Du bist {self.name}.", stop_event)
         
-        if response and response != "[ABGEBROCHEN]":
-            # NEU: Prüfen auf Wiederholung
-            if response in self.schon_gesagtes[-5:]:  # Letzte 5 Beiträge
+        if response and response not in ["[ABGEBROCHEN]", "[AUSGESCHLOSSEN]"]:
+            # Wiederholungscheck
+            if response in self.schon_gesagtes[-5:]:
                 self.wiederholungen += 1
                 if self.wiederholungen >= 3:
                     self.ausgeschlossen = True
                     return "[WEGEN WIEDERHOLUNG AUSGESCHLOSSEN]"
                 else:
-                    # Noch eine Chance, aber mit Warnung
                     warn_prompt = f"{base_prompt}\n\nACHTUNG: Das hast du schon gesagt! Sag etwas ANDERES!"
                     response = lm.ask(warn_prompt, f"Du bist {self.name}.", stop_event)
             
-            # Im Gedächtnis speichern
+            # Speichern
             self.schon_gesagtes.append(response)
             self.arguments.append(response)
             self.last_response = response
             self.energy = max(0, self.energy - 5)
+            
+            # NEU: Lernen aus der Antwort
+            fact_check = lm.ask(
+                f"Extrahiere 1 Fakt aus dieser Aussage: '{response}'",
+                "Antworte nur mit einem kurzen Satz"
+            )
+            if fact_check and fact_check not in ["[ABGEBROCHEN]", "..."]:
+                if "kein" not in fact_check.lower() and "nicht" not in fact_check.lower():
+                    if fact_check not in self.learned_facts:
+                        self.learned_facts.append(fact_check)
+                        self.save_memory()
         
         return response
     
@@ -277,7 +321,7 @@ Antworte in 1-2 Sätzen."""
         
         return response
 
-# ===================== MODERATOR MIT ECHTEN KONSEQUENZEN =====================
+# ===================== MODERATOR =====================
 class Moderator:
     def __init__(self, data: dict):
         self.name = data["name"]
@@ -290,13 +334,11 @@ class Moderator:
         self.goals = data.get("goals", [])
         self.fears = data.get("fears", [])
         
-        # Regeln aus JSON
         self.intervention_styles = data.get("intervention_styles", {})
         self.question_styles = data.get("question_styles", {})
         self.max_evasions = data.get("max_evasions", 3)
         self.abbrechen_nach = data.get("abbrechen_nach", 3)
         
-        # Betriebszustand
         self.enabled = True
         self.last_question = ""
         self.questions_asked = 0
@@ -347,14 +389,12 @@ Stelle dich KURZ vor (maximal 2 Sätze) und nenne das heutige Thema."""
         if stop_event and stop_event.is_set():
             return None
         
-        # Prüfen ob Agent bereits abgebrochen wurde
         if agent_name in self.abgebrochene_agenten:
             return None
         
         self.questions_asked += 1
         evasion_count = self.evasions.get(agent_name, 0)
         
-        # Frage-Stil aus JSON
         if evasion_count == 0:
             question_style = self.question_styles.get("first", "Stelle eine Frage zum Thema.")
         else:
@@ -415,11 +455,9 @@ Formuliere EINE präzise Frage (maximal 2 Sätze)."""
         if agent_name in self.abgebrochene_agenten:
             return None, False
         
-        # Zähle Ausflüchte
         self.evasions[agent_name] = self.evasions.get(agent_name, 0) + 1
         evasion_count = self.evasions[agent_name]
         
-        # Bestimme Interventions-Stil
         if evasion_count == 1:
             style_key = "first"
         elif evasion_count == 2:
@@ -438,7 +476,6 @@ Formuliere EINE präzise Frage (maximal 2 Sätze)."""
         except:
             intervention_text = f"Bitte bleiben Sie beim Thema {topic}, {agent_name}."
         
-        # NEU: Echter Abbruch bei 3. Abschweifung
         abbrechen = evasion_count >= self.abbrechen_nach
         if abbrechen:
             self.abgebrochene_agenten.add(agent_name)
@@ -513,7 +550,6 @@ class Simulation:
         self.is_running = True
         self.discussion_log = []
         
-        # Agenten zurücksetzen
         for agent in self.agents:
             agent.schon_gesagtes = []
             agent.wiederholungen = 0
@@ -524,7 +560,6 @@ class Simulation:
             self.moderator.evasions = {}
             self.moderator.abgebrochene_agenten = set()
         
-        # 1. Einführung
         if use_moderator and self.moderator:
             intro = self.moderator.introduce(topic, document, self.lm, self.stop_event)
             if intro and intro != "[ABGEBROCHEN]":
@@ -535,7 +570,6 @@ class Simulation:
             yield ("system", "📢 Diskussion ohne Moderator gestartet")
             self.discussion_log.append("System: Diskussion ohne Moderator")
         
-        # 2. Diskussion
         for round_num in range(rounds):
             if self.stop_event.is_set():
                 break
@@ -544,12 +578,10 @@ class Simulation:
                 if self.stop_event.is_set():
                     break
                 
-                # Prüfen ob Agent ausgeschlossen
                 if agent.ausgeschlossen:
                     continue
                 
                 if use_moderator and self.moderator:
-                    # Prüfen ob Agent vom Moderator abgebrochen
                     if agent.name in self.moderator.abgebrochene_agenten:
                         continue
                     
@@ -569,7 +601,7 @@ class Simulation:
                         if answer == "[WEGEN WIEDERHOLUNG AUSGESCHLOSSEN]":
                             yield ("system", f"⛔ {agent.name} wurde wegen dauerhafter Wiederholung ausgeschlossen!")
                             self.discussion_log.append(f"System: {agent.name} ausgeschlossen")
-                        elif answer and answer != "[ABGEBROCHEN]" and answer != "[AUSGESCHLOSSEN]":
+                        elif answer and answer not in ["[ABGEBROCHEN]", "[AUSGESCHLOSSEN]"]:
                             yield ("agent", agent.name, answer, agent.color)
                             self.discussion_log.append(f"{agent.name}: {answer}")
                             time.sleep(0.3)
@@ -585,18 +617,16 @@ class Simulation:
                                     self.discussion_log.append(f"System: {agent.name} ausgeschlossen")
                 
                 else:
-                    # Ohne Moderator
                     answer = agent.answer(topic, document, self.lm, self.stop_event)
                     
                     if answer == "[WEGEN WIEDERHOLUNG AUSGESCHLOSSEN]":
                         yield ("system", f"⛔ {agent.name} wurde wegen dauerhafter Wiederholung ausgeschlossen!")
                         self.discussion_log.append(f"System: {agent.name} ausgeschlossen")
-                    elif answer and answer != "[ABGEBROCHEN]" and answer != "[AUSGESCHLOSSEN]":
+                    elif answer and answer not in ["[ABGEBROCHEN]", "[AUSGESCHLOSSEN]"]:
                         yield ("agent", agent.name, answer, agent.color)
                         self.discussion_log.append(f"{agent.name}: {answer}")
                         time.sleep(0.3)
                 
-                # Reaktionen der anderen
                 if round_num < rounds - 1 and not self.stop_event.is_set():
                     for other in self.agents:
                         if (other.name != agent.name and not other.ausgeschlossen and 
@@ -607,12 +637,11 @@ class Simulation:
                             
                             reaction = other.react_to(agent.name, agent.last_response, topic,
                                                       self.lm, self.stop_event)
-                            if reaction and reaction != "[ABGEBROCHEN]" and reaction != "[AUSGESCHLOSSEN]":
+                            if reaction and reaction not in ["[ABGEBROCHEN]", "[AUSGESCHLOSSEN]"]:
                                 yield ("agent", other.name, f"[Reaktion] {reaction}", other.color)
                                 self.discussion_log.append(f"{other.name} reagiert: {reaction}")
                                 time.sleep(0.2)
         
-        # 3. Zusammenfassung
         if not self.stop_event.is_set() and use_moderator and self.moderator:
             summary = self.moderator.summarize(
                 "\n".join(self.discussion_log[-10:]), topic, self.lm, self.stop_event
@@ -626,7 +655,7 @@ class Simulation:
 class MiroFishUltimateGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("🐟 SynthAgora - Mit Gedächtnis & Konsequenzen")
+        self.root.title("🐟 SynthAgora - Mit Gedächtnis & Lernen")
         self.root.geometry("1400x900")
         self.root.configure(bg=Config.BG_MAIN)
         
@@ -666,7 +695,6 @@ class MiroFishUltimateGUI:
         self._setup_statusbar()
     
     def _setup_main_tab(self):
-        # Agenten-Auswahl
         agent_frame = tk.LabelFrame(self.tab_main, text="📁 Agenten-Set", 
                                     bg=Config.BG_PANEL, fg=Config.FG,
                                     font=("Segoe UI", 12, "bold"))
@@ -681,7 +709,6 @@ class MiroFishUltimateGUI:
                                                    Config.BG_BUTTON, self.load_selected_agents)
         self.load_agents_btn.pack(pady=(0,10))
         
-        # Moderator-Auswahl + Checkbox
         mod_frame = tk.LabelFrame(self.tab_main, text="🎭 Moderator", 
                                    bg=Config.BG_PANEL, fg=Config.FG,
                                    font=("Segoe UI", 12, "bold"))
@@ -707,7 +734,6 @@ class MiroFishUltimateGUI:
                                                 Config.BG_INPUT, self.load_selected_moderator)
         self.load_mod_btn.pack(side=tk.LEFT)
         
-        # Thema
         topic_frame = tk.LabelFrame(self.tab_main, text="🎯 Thema", 
                                     bg=Config.BG_PANEL, fg=Config.FG,
                                     font=("Segoe UI", 12, "bold"))
@@ -720,7 +746,6 @@ class MiroFishUltimateGUI:
         self.topic_entry.pack(fill=tk.X, padx=10, pady=10)
         self.topic_entry.insert(0, "Sollte Deutschland wieder eine Wehrpflicht einführen, auch für Frauen?")
         
-        # Dokument (optional)
         doc_frame = tk.LabelFrame(self.tab_main, text="📄 Dokument (optional)", 
                                   bg=Config.BG_PANEL, fg=Config.FG,
                                   font=("Segoe UI", 12, "bold"))
@@ -746,7 +771,6 @@ class MiroFishUltimateGUI:
                                 relief='flat', insertbackground=Config.FG)
         self.doc_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # Optionen
         opt_frame = tk.Frame(self.tab_main, bg=Config.BG_MAIN)
         opt_frame.pack(fill=tk.X, padx=20, pady=10)
         
@@ -759,7 +783,6 @@ class MiroFishUltimateGUI:
                          relief='flat', buttonbackground=Config.BG_BUTTON)
         spin.pack(side=tk.LEFT, padx=5)
         
-        # Start Button
         self.start_btn = self._create_button(self.tab_main, "🎬 DISKUSSION STARTEN", 
                                              Config.BG_BUTTON, self.start_discussion)
         self.start_btn.pack(pady=20)
@@ -951,7 +974,15 @@ class MiroFishUltimateGUI:
                     bg=Config.BG_INPUT, fg=Config.FG_DIM,
                     font=("Segoe UI", 9)).pack(anchor=tk.W)
         
-        # NEU: Status-Anzeige
+        # NEU: Fakten-Anzeige
+        facts_frame = tk.Frame(content, bg=Config.BG_INPUT)
+        facts_frame.pack(fill=tk.X, padx=10, pady=2)
+        
+        fact_count = len(agent.learned_facts)
+        tk.Label(facts_frame, text=f"📚 Gelernte Fakten: {fact_count}", 
+                bg=Config.BG_INPUT, fg=Config.FG_DIM,
+                font=("Segoe UI", 8)).pack(anchor=tk.W)
+        
         status_frame = tk.Frame(content, bg=Config.BG_INPUT)
         status_frame.pack(fill=tk.X, padx=10, pady=5)
         
@@ -1039,7 +1070,7 @@ class MiroFishUltimateGUI:
         else:
             self._add_to_chat(f"👥 Ohne Moderator")
         self._add_to_chat(f"👥 {len(self.sim.agents)} Agenten")
-        self._add_to_chat(f"⛔ Bei 3 Wiederholungen/Abschweifungen: AUSSCHLUSS")
+        self._add_to_chat(f"📚 Agenten lernen aus der Diskussion")
         self._add_to_chat(f"{'='*60}\n")
         
         thread = threading.Thread(
@@ -1102,13 +1133,12 @@ class MiroFishUltimateGUI:
                     if isinstance(label, tk.Label) and label.cget("text") == name:
                         widget.response_label.config(text=response[:150] + "..." if len(response) > 150 else response)
                         
-                        # Status updaten
                         agent = next((a for a in self.sim.agents if a.name == name), None)
                         if agent:
                             if agent.ausgeschlossen:
                                 widget.status_label.config(text="⛔ Ausgeschlossen", fg=Config.ERROR)
                             else:
-                                widget.status_label.config(text=f"✅ Aktiv ({len(agent.schon_gesagtes)} Beiträge)", fg=Config.SUCCESS)
+                                widget.status_label.config(text=f"✅ Aktiv ({len(agent.schon_gesagtes)} Beiträge, {len(agent.learned_facts)} Fakten)", fg=Config.SUCCESS)
                         return
     
     def export_chat(self):
