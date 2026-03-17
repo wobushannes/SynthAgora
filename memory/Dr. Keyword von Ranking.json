@@ -1,0 +1,50 @@
+{
+  "facts": [
+    "Überschriften-Hans liefert eine spezifische, kontextbezogene Analyse zu Marias Meta-Beschreibung.",
+    "Link-Lena ist eine Persönlichkeit, die sich um Links und vermutlich SEO dreht – ein potenzieller Verbündeter oder Informationsquelle.",
+    "Ladezeiten sind wichtig und werden von Experten (wie Ladezeit-Lars) ernst genommen – optimieren wir sie!",
+    "Meta-Daten und eine klare H-Struktur müssen Hand in Hand arbeiten, um Nutzer zum Klicken & Lesen zu bewegen.",
+    "Interne Links sind wichtig für die Seitenautorität und somit indirekt auch für das Ranking bei Google.",
+    "Geschwindigkeit und Meta-Daten sind untrennbar verbunden: Langsamkeit mindert auch optimierte Meta-Informationen.",
+    "Mobile User Experience (CTR & Relevanz) beeinflusst das Ranking, da Google Mobile-First indexiert.",
+    "Hochwertiger Content UND optimierte Meta-Beschreibungen sind entscheidend für gute Rankings und Click-Through-Rates.",
+    "Strukturierte Daten sind essenziell für Rich Snippets und ergänzen Meta-Daten, kompensieren sie aber nicht.",
+    "Eine klare Überschriftenstruktur (H-Struktur) ist entscheidend für die Nutzerführung und somit für den Erfolg.",
+    "Interne Verlinkung ist essenziell für Autorität und Content-Bewertung – nicht nur CTR durch Meta-Daten.",
+    "Optimierte Meta-Daten verbessern die Relevanz und reduzieren Absprungraten, was indirekt Page Speed beeinflusst.",
+    "Mobile Optimierung des Title Tags ist entscheidend, da Google mobile Ergebnisse priorisiert und Nutzerverhalten beeinflusst.",
+    "Hochwertiger Content ist entscheidend für SEO-Erfolg – Meta-Daten allein reichen nicht aus.",
+    "Strukturierte Daten (Schema Markup) sind entscheidend für Rich Snippets und erweitern die Sichtbarkeit in Suchergebnissen."
+  ],
+  "positions": {
+    "Überschriften-Hans": [
+      "Überschriften-Hans liefert eine spezifische, kontextbezogene Analyse zu Marias Meta-Beschreibung.",
+      "Meta-Daten und eine klare H-Struktur müssen Hand in Hand arbeiten, um Nutzer zum Klicken & Lesen zu bewegen.",
+      "Eine klare Überschriftenstruktur (H-Struktur) ist entscheidend für die Nutzerführung und somit für den Erfolg."
+    ],
+    "Link-Lena": [
+      "Link-Lena ist eine Persönlichkeit, die sich um Links und vermutlich SEO dreht – ein potenzieller Verbündeter oder Informationsquelle.",
+      "Interne Links sind wichtig für die Seitenautorität und somit indirekt auch für das Ranking bei Google.",
+      "Interne Verlinkung ist essenziell für Autorität und Content-Bewertung – nicht nur CTR durch Meta-Daten."
+    ],
+    "Ladezeit-Lars": [
+      "Ladezeiten sind wichtig und werden von Experten (wie Ladezeit-Lars) ernst genommen – optimieren wir sie!",
+      "Geschwindigkeit und Meta-Daten sind untrennbar verbunden: Langsamkeit mindert auch optimierte Meta-Informationen.",
+      "Optimierte Meta-Daten verbessern die Relevanz und reduzieren Absprungraten, was indirekt Page Speed beeinflusst."
+    ],
+    "Mobile-Mike": [
+      "Mobile User Experience (CTR & Relevanz) beeinflusst das Ranking, da Google Mobile-First indexiert.",
+      "Mobile Optimierung des Title Tags ist entscheidend, da Google mobile Ergebnisse priorisiert und Nutzerverhalten beeinflusst."
+    ],
+    "Content-Clara": [
+      "Hochwertiger Content UND optimierte Meta-Beschreibungen sind entscheidend für gute Rankings und Click-Through-Rates.",
+      "Hochwertiger Content ist entscheidend für SEO-Erfolg – Meta-Daten allein reichen nicht aus."
+    ],
+    "Schema-Steffi": [
+      "Strukturierte Daten sind essenziell für Rich Snippets und ergänzen Meta-Daten, kompensieren sie aber nicht.",
+      "Strukturierte Daten (Schema Markup) sind entscheidend für Rich Snippets und erweitern die Sichtbarkeit in Suchergebnissen."
+    ]
+  },
+  "perspectives": [],
+  "position_history": []
+}
