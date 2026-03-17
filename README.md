@@ -22,7 +22,7 @@ Moderne lokale Multi-Agenten-Debatte mit grafischer Oberfläche, LM Studio Backe
 
 ## Demo-Video / Screenshots
 
-*(Hier wäre jetzt ein guter Platz für 2–4 Screenshots oder ein kurzes Gif/Loom-Video)*
+https://youtu.be/DIhA5LQgyPM
 
 Beispiele:
 
