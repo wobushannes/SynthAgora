@@ -1,73 +1,49 @@
-# SynthAgora
+# 🐟 SynthAgora
 
-**Debatte-Simulation mit echten Konsequenzen**  
-KI-Agenten diskutieren ein Thema – mit **Gedächtnis**, **Wiederholungsverbot** und **Ausschluss** bei 3× Abschweifen oder Wiederholung.
+**Multi-Agent AI Debate Simulator** – KI-Agenten diskutieren kontroverse Themen mit **echtem Gedächtnis**, **Wiederholungsverbot** und **Ausschluss** bei Regelverstößen. Powered by lokalen LLMs (LM Studio, Ollama).
 
-Moderne lokale Multi-Agenten-Debatte mit grafischer Oberfläche, LM Studio Backend und hartem Moderations-Regime.
+[![Python Version](https://img.shields.io/badge/Python-3.9%2B-blue)](https://www.python.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE) [![LLM Backend](https://img.shields.io/badge/LLM-LM%20Studio%20%7C%20Ollama-orange)](https://lmstudio.ai/) [![Project Status](https://img.shields.io/badge/Status-Active-brightgreen)]() [![GitHub last commit](https://img.shields.io/github/last-commit/wobushannes/SynthAgora)]()
 
+👉 **[Demo-Video auf YouTube](https://youtu.be/DIhA5LQgyPM)**
 
 ## ✨ Features
+✅ **Echtes Agenten-Gedächtnis** – Jeder Agent merkt sich, was er und andere gesagt haben  
+✅ **Automatischer Ausschluss** – 3× gleiche Aussage oder 3× Abschweifen → raus!  
+✅ **Lokale LLMs** – Läuft mit LM Studio, Ollama (OpenAI-kompatibel)  
+✅ **Schöne Tkinter-GUI** – Farbige Agentenkarten, Live-Status, Rundenanzeige  
+✅ **Knowledge Graph** – Agenten lernen voneinander, Konzepte werden verknüpft  
+✅ **8+ Agenten gleichzeitig** – Skaliert bis zu 20 Agenten  
+✅ **Konfigurations-Tab** – Wähle Provider, passe Temperatur, Tokens an  
+✅ **Chat-Export** – Speichere Diskussionen als `.txt`  
+✅ **Stop-Button** – Sauberes Thread-Handling
 
-- **Echtes Agenten-Gedächtnis** → Wiederholungen werden gezählt
-- **Automatischer Ausschluss** nach **3× gleichem/ähnlichem Inhalt**
-- **Moderationssystem mit Konsequenzen**  
-  → 3× Abschweifen → Agent wird rausgeworfen
-- **Lokales LLM Backend** (LM Studio / OpenAI-kompatible API)
-- **Schöne Tkinter-GUI** mit farbigen Agenten-Karten
-- **Live-Status** der Agenten (aktiv / ausgeschlossen / Beitragszahl)
-- **Rundenbasiertes System** + freie Reaktionen
-- **Optionales Kontext-Dokument** (z. B. Gesetzestext, Studie, Wikipedia-Auszug)
-- **Export** des kompletten Chat-Verlaufs
-- **Stop-Button** mit sauberem Thread-Handling
-
-## Demo-Video / Screenshots
-
-https://youtu.be/DIhA5LQgyPM
-
-Beispiele:
-
-- Startbildschirm mit Agenten-Auswahl  
-- Diskussion läuft – Agent wird ausgeschlossen  
-- Moderator greift ein  
-- Zusammenfassung am Ende
-
-## Voraussetzungen
-
+## 📋 Voraussetzungen
 - **Python 3.9–3.12**
-- **LM Studio** (oder jede andere OpenAI-kompatible lokale API) läuft auf `http://localhost:1234`
-- Empfohlene Modelle:  
-  7B–13B instruct Modelle (z. B. Llama-3.1, Mistral-Nemo, Qwen2.5, Gemma-2, etc.)
+- **LM Studio** (empfohlen) oder **Ollama** mit einem instruct-Modell (z.B. Llama-3, Mistral, Gemma-2)
 
-## Installation
-
+## 🔧 Installation
 ```bash
-# 1. Repository klonen
-git clone https://github.com/deinusername/mirofish-ultimate.git
-cd mirofish-ultimate
-
-# 2. Virtuelle Umgebung (empfohlen)
+git clone https://github.com/wobushannes/SynthAgora.git
+cd SynthAgora
 python -m venv venv
-source venv/bin/activate    # Linux / macOS
-# oder
-.\venv\Scripts\activate     # Windows
+source venv/bin/activate    # Linux/macOS | .\venv\Scripts\activate (Windows)
+pip install -r requirements.txt
+# LM Studio starten, Modell laden, Server auf Port 1234
+python main.py
 
-LM Studio starten und Server auf Port 1234 laufen lassen
+⚙️ Konfiguration
+Agenten (/agents/): Jeder Agent als JSON mit name, role, personality, color, goals, fears
+Moderatoren (/moderators/): Definieren Interventionsstile, max_evasions, abbrechen_nach
+Dokumente (/examples/): Einfache .txt-Dateien als Diskussionsgrundlage
+Provider: Im GUI-Konfigurations-Tab wählbar (LM Studio, Ollama, OpenAI/BETA, Grok/BETA, Claude/BETA)
 
-
-📁 agents/ - Deine Agenten
-json
-{
-  "name": "Dr. Heinrich von Stahl",
-  "role": "Konservativer Publizist",
-  "personality": "Du bist konservativ und direkt...",
-  "color": "#34495e"
-}
-📁 moderators/ - Deine Moderatoren
-json
-{
-  "name": "Dr. Konrad Streitbar",
-  "style": "konfrontativ-erbarmungslos",
-  "max_evasions": 3
-}
-📁 examples/ - Deine Dokumente
-Einfach .txt Dateien für themenbezogene Diskussionen.
+📁 Projektstruktur
+SynthAgora/
+├── main.py
+├── includes/config.py
+├── agents/           # Agenten-JSONs
+├── moderators/       # Moderator-JSONs
+├── examples/         # Dokumente (.txt)
+├── exports/          # Chat-Verläufe
+├── memory/           # Agenten-Gedächtnis
+└── knowledge_graph/  # Zentraler Knowledge Graph
