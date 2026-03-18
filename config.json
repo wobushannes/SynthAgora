@@ -5,19 +5,164 @@
     "temperature": 0.7,
     "max_tokens": 300
   },
+  "ollama": {
+    "url": "http://localhost:11434/api/chat",
+    "model": "llama3",
+    "timeout": 30,
+    "temperature": 0.7,
+    "max_tokens": 300
+  },
+  "openai": {
+    "url": "https://api.openai.com/v1/chat/completions",
+    "model": "gpt-3.5-turbo",
+    "api_key": "",
+    "timeout": 30,
+    "temperature": 0.7,
+    "max_tokens": 300
+  },
+  "grok": {
+    "url": "https://api.x.ai/v1/chat/completions",
+    "model": "grok-1",
+    "api_key": "",
+    "timeout": 30,
+    "temperature": 0.7,
+    "max_tokens": 300
+  },
+  "claude": {
+    "url": "https://api.anthropic.com/v1/messages",
+    "model": "claude-3-opus-20240229",
+    "api_key": "",
+    "version": "2023-06-01",
+    "timeout": 30,
+    "temperature": 0.7,
+    "max_tokens": 300
+  },
+  "provider": {
+    "active": "lmstudio"
+  },
   "ui": {
     "theme": "dark",
     "font_family": "Segoe UI",
-    "font_size": 10
+    "font_size": 10,
+    "colors": {
+      "bg_main": "#1a1a1a",
+      "bg_panel": "#2d2d2d",
+      "bg_input": "#3c3c3c",
+      "bg_button": "#0e639c",
+      "bg_button_hover": "#1177bb",
+      "bg_stop": "#b52b2b",
+      "bg_stop_hover": "#c43a3a",
+      "fg": "#ffffff",
+      "fg_dim": "#cccccc",
+      "fg_button": "#ffffff",
+      "success": "#2e7d32",
+      "error": "#b52b2b",
+      "warning": "#ff9900",
+      "beta": "#9b59b6"
+    }
   },
   "simulation": {
-    "default_rounds": 2,
-    "auto_save_interval": 60
+    "default_rounds": 3,
+    "auto_save_interval": 60,
+    "memory_palace": {
+      "enabled": true,
+      "crystal_decay": 0.95,
+      "max_memories_per_agent": 500
+    },
+    "teams": {
+      "enabled": true,
+      "auto_rotate_spokesperson": true
+    },
+    "personality_development": {
+      "enabled": true,
+      "change_rate": 0.05,
+      "learning_rate": 0.03
+    },
+    "scoring": {
+      "enabled": true,
+      "points_per_contribution": 1,
+      "points_per_influence": 5,
+      "points_per_correct_prognosis": 10,
+      "points_penalty_exclusion": -5
+    },
+    "prognosis": {
+      "enabled": true,
+      "auto_collect": false,
+      "verification_threshold": 0.5
+    },
+    "training": {
+      "enabled": true,
+      "max_training_rounds": 5,
+      "skill_increase_per_round": 0.1
+    }
+  },
+  "external_sources": {
+    "enabled": false,
+    "timeout": 10,
+    "plugins": {
+      "wikipedia": {
+        "enabled": false,
+        "api_url": "https://de.wikipedia.org/w/api.php"
+      },
+      "arxiv": {
+        "enabled": false,
+        "api_url": "http://export.arxiv.org/api/query"
+      },
+      "duckduckgo": {
+        "enabled": false,
+        "url": "https://html.duckduckgo.com/html/"
+      },
+      "openwebsearch": {
+        "enabled": false,
+        "command": "npx open-websearch@latest",
+        "port": 3000,
+        "url": "http://localhost:3000/search"
+      },
+      "openalex": {
+        "enabled": false,
+        "api_url": "https://api.openalex.org/works"
+      },
+      "crossref": {
+        "enabled": false,
+        "api_url": "https://api.crossref.org/works",
+        "email": "user@example.com"
+      },
+      "pubmed": {
+        "enabled": false,
+        "esearch_url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+        "efetch_url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+      },
+      "unpaywall": {
+        "enabled": false,
+        "api_url": "https://api.unpaywall.org/v2/search",
+        "email": "user@example.com"
+      },
+      "brave": {
+        "enabled": false,
+        "api_url": "https://api.search.brave.com/res/v1/web/search",
+        "api_key": ""
+      }
+    }
   },
   "folders": {
     "agents": "agents",
     "moderators": "moderators",
     "examples": "examples",
-    "exports": "exports"
-  }
+    "exports": "exports",
+    "memory": "memory",
+    "knowledge_graph": "knowledge_graph",
+    "plugins": "includes/plugins"
+  },
+  "knowledge_graph": {
+    "auto_save": true,
+    "save_interval": 30,
+    "max_edges_per_node": 1000
+  },
+  "export": {
+    "format": "txt",
+    "include_metadata": true,
+    "include_timestamp": true
+  },
+  "version": "2.0.0",
+  "last_updated": "2024-03-18"
 }

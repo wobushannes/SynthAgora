@@ -1,0 +1,10 @@
+Die Entwicklung von Künstlicher Intelligenz schreitet rasant voran. 
+Während einige die Chancen für Medizin, Wissenschaft und Wirtschaft betonen, 
+warnen andere vor unkontrollierten Risiken. Besonders diskutiert werden:
+- Arbeitsplatzverlust durch Automatisierung
+- Manipulation durch KI-generierte Inhalte
+- Kontrollverlust bei autonomen Systemen
+- Datenschutz und Überwachung
+- Die Frage nach moralischer Verantwortung bei KI-Entscheidungen
+
+Sollten wir die KI-Entwicklung stärker regulieren oder dem freien Markt überlassen?
