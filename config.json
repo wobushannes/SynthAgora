@@ -1,0 +1,23 @@
+{
+  "lm_studio": {
+    "url": "http://localhost:1234/v1/chat/completions",
+    "timeout": 30,
+    "temperature": 0.7,
+    "max_tokens": 300
+  },
+  "ui": {
+    "theme": "dark",
+    "font_family": "Segoe UI",
+    "font_size": 10
+  },
+  "simulation": {
+    "default_rounds": 2,
+    "auto_save_interval": 60
+  },
+  "folders": {
+    "agents": "agents",
+    "moderators": "moderators",
+    "examples": "examples",
+    "exports": "exports"
+  }
+}

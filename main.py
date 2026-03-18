@@ -4,7 +4,7 @@
 ╔══════════════════════════════════════════════════════════════════════════╗
 ║  🐟 SynthAgora - Mit GEDÄCHTNIS & KNOWLEDGE GRAPH                  ║
 ║  Agenten lernen voneinander - THEMENUNABHÄNGIG!                        ║
-║  Fix für 'insight' Fehler - Vollständige Antworten!                    ║
+║  NEU: Externe Quellen mit INTELLIGENTER ENTSCHEIDUNG!                  ║
 ╚══════════════════════════════════════════════════════════════════════════╝
 """
 
@@ -21,10 +21,217 @@ import re
 import os
 import glob
 import sys
+import subprocess
+import urllib.parse
 
 # Config importieren
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from includes.config import Config
+
+# ===================== EXTERNE QUELLEN CLIENT =====================
+class ExternalSourceClient:
+    """Verwaltet externe, kostenfreie Quellen für die Recherche"""
+    
+    def __init__(self):
+        self.sources = {
+            "openwebsearch": {
+                "name": "Open-WebSearch",
+                "enabled": False,
+                "description": "Mehrere Suchmaschinen (Bing, DuckDuckGo, Baidu, Exa, Brave)",
+                "command": "npx open-websearch@latest",
+                "port": 3000,
+                "url": "http://localhost:3000/search",
+                "needs_server": True,
+                "server_process": None
+            },
+            "wikipedia": {
+                "name": "Wikipedia",
+                "enabled": False,
+                "description": "Enzyklopädisches Wissen, Definitionen, Fakten",
+                "api_url": "https://de.wikipedia.org/w/api.php",
+                "needs_server": False
+            },
+            "arxiv": {
+                "name": "arXiv",
+                "enabled": False,
+                "description": "Wissenschaftliche Paper (Physik, Mathematik, Informatik)",
+                "api_url": "http://export.arxiv.org/api/query",
+                "needs_server": False
+            },
+            "duckduckgo": {
+                "name": "DuckDuckGo (Light)",
+                "enabled": False,
+                "description": "Einfache HTML-Suche ohne API-Key",
+                "url": "https://html.duckduckgo.com/html/",
+                "needs_server": False
+            }
+        }
+        self.use_external = False
+        self.search_timeout = 10
+    
+    def toggle_source(self, source_key: str, enabled: bool):
+        """Aktiviert/deaktiviert eine Quelle"""
+        if source_key in self.sources:
+            self.sources[source_key]["enabled"] = enabled
+            
+            # Open-WebSearch Server steuern
+            if source_key == "openwebsearch":
+                if enabled and not self.sources[source_key]["server_process"]:
+                    self._start_openwebsearch()
+                elif not enabled and self.sources[source_key]["server_process"]:
+                    self._stop_openwebsearch()
+    
+    def _start_openwebsearch(self):
+        """Startet den Open-WebSearch Server"""
+        try:
+            cmd = self.sources["openwebsearch"]["command"].split()
+            process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.sources["openwebsearch"]["server_process"] = process
+            print("✅ Open-WebSearch Server gestartet")
+            time.sleep(2)  # Kurz warten, bis Server hochgefahren
+        except Exception as e:
+            print(f"❌ Fehler beim Starten von Open-WebSearch: {e}")
+    
+    def _stop_openwebsearch(self):
+        """Stoppt den Open-WebSearch Server"""
+        process = self.sources["openwebsearch"]["server_process"]
+        if process:
+            process.terminate()
+            process.wait()
+            self.sources["openwebsearch"]["server_process"] = None
+            print("✅ Open-WebSearch Server gestoppt")
+    
+    def search(self, query: str, max_results: int = 3) -> List[Dict]:
+        """Durchsucht alle aktivierten Quellen und gibt kombinierte Ergebnisse zurück"""
+        if not self.use_external:
+            return []
+        
+        results = []
+        
+        # Open-WebSearch
+        if self.sources["openwebsearch"]["enabled"]:
+            try:
+                response = requests.get(
+                    self.sources["openwebsearch"]["url"],
+                    params={"q": query, "num": max_results},
+                    timeout=self.search_timeout
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    for item in data.get("results", [])[:max_results]:
+                        results.append({
+                            "source": "Open-WebSearch",
+                            "title": item.get("title", ""),
+                            "url": item.get("url", ""),
+                            "snippet": item.get("snippet", ""),
+                            "relevance": 1.0
+                        })
+            except Exception as e:
+                print(f"⚠️ Open-WebSearch Fehler: {e}")
+        
+        # Wikipedia
+        if self.sources["wikipedia"]["enabled"]:
+            try:
+                params = {
+                    "action": "query",
+                    "list": "search",
+                    "srsearch": query,
+                    "format": "json",
+                    "srlimit": max_results
+                }
+                response = requests.get(
+                    self.sources["wikipedia"]["api_url"],
+                    params=params,
+                    timeout=self.search_timeout
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    for item in data.get("query", {}).get("search", [])[:max_results]:
+                        results.append({
+                            "source": "Wikipedia",
+                            "title": item.get("title", ""),
+                            "url": f"https://de.wikipedia.org/wiki/{urllib.parse.quote(item.get('title', ''))}",
+                            "snippet": item.get("snippet", "").replace("<span class=\"searchmatch\">", "").replace("</span>", ""),
+                            "relevance": 0.9
+                        })
+            except Exception as e:
+                print(f"⚠️ Wikipedia Fehler: {e}")
+        
+        # arXiv
+        if self.sources["arxiv"]["enabled"]:
+            try:
+                params = {
+                    "search_query": f"all:{query}",
+                    "max_results": max_results
+                }
+                response = requests.get(
+                    self.sources["arxiv"]["api_url"],
+                    params=params,
+                    timeout=self.search_timeout
+                )
+                if response.status_code == 200:
+                    import xml.etree.ElementTree as ET
+                    root = ET.fromstring(response.text)
+                    ns = {"atom": "http://www.w3.org/2005/Atom"}
+                    for entry in root.findall("atom:entry", ns)[:max_results]:
+                        title = entry.find("atom:title", ns).text if entry.find("atom:title", ns) is not None else ""
+                        summary = entry.find("atom:summary", ns).text if entry.find("atom:summary", ns) is not None else ""
+                        url = entry.find("atom:id", ns).text if entry.find("atom:id", ns) is not None else ""
+                        results.append({
+                            "source": "arXiv",
+                            "title": title,
+                            "url": url,
+                            "snippet": summary[:200] + "..." if len(summary) > 200 else summary,
+                            "relevance": 0.8
+                        })
+            except Exception as e:
+                print(f"⚠️ arXiv Fehler: {e}")
+        
+        # DuckDuckGo Light (HTML-Suche)
+        if self.sources["duckduckgo"]["enabled"]:
+            try:
+                response = requests.post(
+                    self.sources["duckduckgo"]["url"],
+                    data={"q": query},
+                    headers={"User-Agent": "Mozilla/5.0"},
+                    timeout=self.search_timeout
+                )
+                if response.status_code == 200:
+                    # Einfaches Parsen der HTML-Ergebnisse
+                    import re
+                    results_html = response.text
+                    # Sehr einfaches Parsen - in Produktion besser BeautifulSoup nutzen
+                    for i, match in enumerate(re.finditer(r'<a rel="nofollow" href="([^"]+)"[^>]*>([^<]+)</a>', results_html)):
+                        if i >= max_results:
+                            break
+                        url = match.group(1)
+                        title = match.group(2)
+                        results.append({
+                            "source": "DuckDuckGo",
+                            "title": title,
+                            "url": url,
+                            "snippet": "",
+                            "relevance": 0.7
+                        })
+            except Exception as e:
+                print(f"⚠️ DuckDuckGo Fehler: {e}")
+        
+        # Nach Relevanz sortieren
+        results.sort(key=lambda x: x["relevance"], reverse=True)
+        return results
+    
+    def format_results(self, results: List[Dict]) -> str:
+        """Formatiert Suchergebnisse für die Anzeige"""
+        if not results:
+            return ""
+        
+        formatted = "\n📚 EXTERNE RECHERCHE:\n"
+        for i, r in enumerate(results[:3], 1):
+            formatted += f"\n{i}. [{r['source']}] {r['title']}\n"
+            formatted += f"   {r['url']}\n"
+            if r['snippet']:
+                formatted += f"   {r['snippet'][:150]}...\n"
+        return formatted
 
 # ===================== LM STUDIO / OLLAMA CLIENT =====================
 class LLMClient:
@@ -241,7 +448,7 @@ class KnowledgeGraph:
 
 # ===================== AGENT =====================
 class Agent:
-    def __init__(self, data: dict, knowledge_graph: KnowledgeGraph):
+    def __init__(self, data: dict, knowledge_graph: KnowledgeGraph, external_client: ExternalSourceClient):
         self.name = data["name"]
         self.role = data["role"]
         self.personality = data["personality"]
@@ -267,6 +474,7 @@ class Agent:
         self.position_history = []
         
         self.knowledge_graph = knowledge_graph
+        self.external_client = external_client
         self.agent_id = f"agent_{self.name.lower().replace(' ', '_')}"
         self.discussion_log = None
         
@@ -400,6 +608,39 @@ Diskussion: "{discussion_excerpt}". Hat sich deine Sicht geändert? In EINEM Sat
             context.append(f"• Erkannt: {entry['insight']}")
         return "\n".join(context) if context else ""
     
+    def search_external(self, query: str) -> str:
+        """Führt externe Recherche durch und gibt formatierte Ergebnisse zurück"""
+        if not self.external_client.use_external:
+            return ""
+        
+        results = self.external_client.search(query)
+        return self.external_client.format_results(results)
+    
+    def decide_to_search(self, text: str, lm: LLMClient) -> bool:
+        """Entscheidet intelligent, ob eine externe Suche sinnvoll ist"""
+        
+        prompt = f"""Du bist {self.name}, {self.role}. Deine Persönlichkeit: {self.personality}
+
+Aufgabe: Solltest du für folgende Aussage/Thema eine externe Recherche durchführen?
+
+Kriterien für JA:
+- Dir fehlen Fakten oder aktuelle Daten
+- Die Aussage eines anderen erscheint dir zweifelhaft
+- Es geht um spezifische Fachbegriffe, die du nicht kennst
+- Aktuelle Entwicklungen oder Statistiken sind relevant
+
+Kriterien für NEIN:
+- Du hast bereits alles Nötige im Gedächtnis (Knowledge Graph)
+- Es ist eine reine Meinungsäußerung ohne Faktenbezug
+- Die Frage ist einfach und trivial
+
+Text: "{text}"
+
+Antworte NUR mit JA oder NEIN."""
+
+        result = lm.ask(prompt, f"Du bist {self.name}.")
+        return "JA" in result.upper()
+    
     def answer(self, topic: str, document: Optional[str], 
                lm: LLMClient, stop_event: threading.Event = None, round_num: int = 0) -> str:
         if stop_event and stop_event.is_set():
@@ -458,8 +699,20 @@ Hat dich ein Argument ÜBERZEUGT? Wenn JA: Antworte mit "JA:[JA/NEIN] weil..." W
         
         knowledge = self.get_knowledge_context()
         
-        # THEMENUNABHÄNGIGER Prompt - KEINE Themenvorgabe!
-        base_prompt = f"""Du bist {self.name}, {self.role}. Charakter: {self.personality}
+        # INTELLIGENTE Entscheidung für externe Recherche
+        external_info = ""
+        if self.external_client.use_external:
+            search_query = topic
+            if document:
+                search_query += " " + document[:100]
+            if self.decide_to_search(search_query, lm):
+                external_info = self.search_external(search_query)
+                if external_info:
+                    print(f"🌐 {self.name} sucht extern: {search_query[:50]}...")
+        
+        # THEMENUNABHÄNGIGER Prompt - KEINE Texterwähnung wenn kein Dokument!
+        if document:
+            base_prompt = f"""Du bist {self.name}, {self.role}. Charakter: {self.personality}
 Bildung: {self.education} Hintergrund: {self.background}
 
 Aufgabe: Analysiere und bewerte den folgenden Text aus deiner fachlichen Perspektive. 
@@ -467,22 +720,51 @@ Sei spezifisch, konkret und nenne Beispiele aus dem Text.
 Deine Antwort sollte 2-3 Sätze lang sein und klare Handlungsempfehlungen geben.
 
 Text:
-{document if document else 'Kein Text vorhanden'}
+{document}
+
+Antworte:"""
+        else:
+            base_prompt = f"""Du bist {self.name}, {self.role}. Charakter: {self.personality}
+Bildung: {self.education} Hintergrund: {self.background}
+
+Thema der Diskussion: {topic}
+
+Aufgabe: Diskutiere das Thema aus deiner fachlichen Perspektive. 
+Sei spezifisch, konkret und bringe deine Argumente ein.
+Deine Antwort sollte 2-3 Sätze lang sein.
 
 Antworte:"""
         
-        if knowledge:
-            base_prompt = f"""Du bist {self.name}, {self.role}. Charakter: {self.personality}
+        if knowledge or external_info:
+            if document:
+                base_prompt = f"""Du bist {self.name}, {self.role}. Charakter: {self.personality}
 
 DEIN WISSEN (aus früheren Diskussionen):
 {knowledge}
+
+{external_info}
 
 Aufgabe: Analysiere und bewerte den folgenden Text aus deiner fachlichen Perspektive. 
 Sei spezifisch, konkret und nenne Beispiele aus dem Text.
 Deine Antwort sollte 2-3 Sätze lang sein und klare Handlungsempfehlungen geben.
 
 Text:
-{document if document else 'Kein Text vorhanden'}
+{document}
+
+Antworte:"""
+            else:
+                base_prompt = f"""Du bist {self.name}, {self.role}. Charakter: {self.personality}
+
+DEIN WISSEN (aus früheren Diskussionen):
+{knowledge}
+
+{external_info}
+
+Thema der Diskussion: {topic}
+
+Aufgabe: Diskutiere das Thema aus deiner fachlichen Perspektive. 
+Sei spezifisch, konkret und bringe deine Argumente ein.
+Deine Antwort sollte 2-3 Sätze lang sein.
 
 Antworte:"""
         
@@ -513,7 +795,10 @@ Antworte:"""
             return response
         else:
             # Fallback, wenn Antwort zu kurz oder leer
-            fallback = f"Aus meiner Perspektive als {self.role} sehe hier deutliches Optimierungspotential. Der Text ist zu oberflächlich und benötigt mehr Substanz."
+            if document:
+                fallback = f"Aus meiner Perspektive als {self.role} sehe hier deutliches Optimierungspotential. Der Text ist zu oberflächlich und benötigt mehr Substanz."
+            else:
+                fallback = f"Als {self.role} finde ich das Thema {topic} sehr relevant. Meiner Meinung nach sollte man hier besonders auf {self.fears[0] if self.fears else 'die langfristigen Folgen'} achten."
             self.schon_gesagtes.append(fallback)
             self.last_response = fallback
             return fallback
@@ -525,13 +810,25 @@ Antworte:"""
         if self.ausgeschlossen:
             return "[AUSGESCHLOSSEN]"
         
+        # INTELLIGENTE Entscheidung für externe Recherche bei Reaktionen
+        external_info = ""
+        if self.external_client.use_external:
+            if self.decide_to_search(statement, lm):
+                external_info = self.search_external(statement)
+                if external_info:
+                    print(f"🌐 {self.name} sucht extern (Reaktion): {statement[:50]}...")
+        
         # Längerer Prompt für ausführlichere Reaktionen
         prompt = f"""Du bist {self.name}, {self.role}. Deine Persönlichkeit: {self.personality}
 
 {speaker} hat gerade gesagt: "{statement}"
 
+Thema der Diskussion: {topic}
+
+{external_info}
+
 Aufgabe: Reagiere DIREKT auf {speaker}'s Aussage aus deiner fachlichen Perspektive. 
-Sei spezifisch, konkret und nenne Beispiele aus dem Text (falls vorhanden).
+Sei spezifisch, konkret und nenne Beispiele oder Argumente.
 Deine Antwort sollte 2-3 Sätze lang sein.
 
 Antworte:"""
@@ -548,7 +845,7 @@ Antworte:"""
             return response
         else:
             # Fallback, wenn Antwort zu kurz ist
-            fallback = f"Ich stimme {speaker} zu, dass hier noch deutliches Verbesserungspotential besteht. Besonders die mangelnde Tiefe und fehlende spezifische Details sind problematisch."
+            fallback = f"Ich stimme {speaker} zu, dass hier noch Diskussionsbedarf besteht. Besonders die langfristigen Auswirkungen sind wichtig."
             self.schon_gesagtes.append(f"[Reaktion] {fallback}")
             self.last_response = fallback
             return fallback
@@ -617,6 +914,7 @@ Thema: "{topic}". Stelle dich KURZ vor (max 2 Sätze)."""
 class Simulation:
     def __init__(self):
         self.lm = LLMClient()
+        self.external = ExternalSourceClient()
         self.agents: List[Agent] = []
         self.moderator: Optional[Moderator] = None
         self.config_name = ""
@@ -636,7 +934,7 @@ class Simulation:
             self.config_name = data.get("name", "Unbekannt")
             self.agents = []
             for agent_data in data["agents"]:
-                agent = Agent(agent_data, self.knowledge_graph)
+                agent = Agent(agent_data, self.knowledge_graph, self.external)
                 self.agents.append(agent)
             return True
         except:
@@ -743,7 +1041,7 @@ class Simulation:
                                     self.discussion_log.append(f"System: {agent.name} ausgeschlossen")
                 
                 else:
-                    # OHNE MODERATOR - Agent analysiert den Text
+                    # OHNE MODERATOR - Agent diskutiert
                     answer = agent.answer(topic, document, self.lm, self.stop_event, round_num)
                     if answer == "[WEGEN WIEDERHOLUNG AUSGESCHLOSSEN]":
                         yield ("system", f"⛔ {agent.name} ausgeschlossen!")
@@ -974,11 +1272,180 @@ class ConfigTab:
         else:
             messagebox.showerror("Fehler", "❌ Speichern fehlgeschlagen!")
 
+# ===================== EXTERNAL SOURCES TAB =====================
+class ExternalSourcesTab:
+    def __init__(self, parent, sim):
+        self.parent = parent
+        self.sim = sim
+        self.frame = tk.Frame(parent, bg=Config.BG_MAIN)
+        self.source_vars = {}
+        self.test_entry = None
+        self.test_result = None
+        self.use_external_var = None
+        self._setup_ui()
+    
+    def _setup_ui(self):
+        # Alte Widgets löschen
+        for widget in self.frame.winfo_children():
+            widget.destroy()
+        
+        # Haupt-Enable
+        main_frame = tk.LabelFrame(self.frame, text="🌐 Externe Recherche (kostenfrei)", 
+                                   bg=Config.BG_PANEL, fg=Config.FG,
+                                   font=("Segoe UI", 12, "bold"))
+        main_frame.pack(fill=tk.X, padx=20, pady=10)
+        
+        self.use_external_var = tk.BooleanVar(value=self.sim.external.use_external)
+        use_check = tk.Checkbutton(main_frame, text="✅ Externe Quellen verwenden", 
+                                   variable=self.use_external_var,
+                                   bg=Config.BG_PANEL, fg=Config.FG,
+                                   selectcolor=Config.BG_PANEL,
+                                   font=("Segoe UI", 11, "bold"),
+                                   command=self.toggle_external)
+        use_check.pack(anchor=tk.W, padx=10, pady=10)
+        
+        tk.Label(main_frame, text="Aktivierte Quellen werden bei jeder Antwort durchsucht.",
+                bg=Config.BG_PANEL, fg=Config.FG_DIM,
+                font=("Segoe UI", 9, "italic")).pack(anchor=tk.W, padx=10, pady=(0,10))
+        
+        # Quellen
+        sources_frame = tk.LabelFrame(self.frame, text="📚 Verfügbare Quellen", 
+                                      bg=Config.BG_PANEL, fg=Config.FG,
+                                      font=("Segoe UI", 12, "bold"))
+        sources_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+        
+        self.source_vars = {}
+        row = 0
+        for key, source in self.sim.external.sources.items():
+            # Checkbox
+            var = tk.BooleanVar(value=source["enabled"])
+            self.source_vars[key] = var
+            
+            cb = tk.Checkbutton(sources_frame, text=source["name"], variable=var,
+                               bg=Config.BG_PANEL, fg=Config.FG,
+                               selectcolor=Config.BG_PANEL,
+                               font=("Segoe UI", 10, "bold"),
+                               command=lambda k=key: self.toggle_source(k))
+            cb.grid(row=row, column=0, sticky=tk.W, padx=10, pady=5)
+            
+            # Beschreibung
+            tk.Label(sources_frame, text=source["description"],
+                    bg=Config.BG_PANEL, fg=Config.FG_DIM,
+                    font=("Segoe UI", 9)).grid(row=row, column=1, sticky=tk.W, padx=10, pady=5)
+            
+            # Status
+            status_text = "✅ Aktiv" if source["enabled"] else "⏸️ Inaktiv"
+            status_color = Config.SUCCESS if source["enabled"] else Config.FG_DIM
+            tk.Label(sources_frame, text=status_text,
+                    bg=Config.BG_PANEL, fg=status_color,
+                    font=("Segoe UI", 9)).grid(row=row, column=2, sticky=tk.W, padx=10, pady=5)
+            
+            row += 1
+        
+        # Open-WebSearch Hinweis
+        tk.Label(sources_frame, 
+                text="Hinweis: Open-WebSearch benötigt 'npx open-websearch@latest' (wird automatisch gestartet)",
+                bg=Config.BG_PANEL, fg=Config.WARNING,
+                font=("Segoe UI", 9, "italic")).grid(row=row, column=0, columnspan=3, sticky=tk.W, padx=10, pady=10)
+        
+        # Test-Button
+        test_frame = tk.LabelFrame(self.frame, text="🔍 Test-Suche", 
+                                   bg=Config.BG_PANEL, fg=Config.FG,
+                                   font=("Segoe UI", 12, "bold"))
+        test_frame.pack(fill=tk.X, padx=20, pady=10)
+        
+        # Eingabezeile
+        input_frame = tk.Frame(test_frame, bg=Config.BG_PANEL)
+        input_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        self.test_entry = tk.Entry(input_frame, bg=Config.BG_INPUT, fg=Config.FG,
+                                   font=("Segoe UI", 10), width=50)
+        self.test_entry.pack(side=tk.LEFT, padx=5)
+        self.test_entry.insert(0, "Suchbegriff eingeben...")
+        self.test_entry.bind("<FocusIn>", self._on_entry_click)
+        self.test_entry.bind("<FocusOut>", self._on_entry_leave)
+        self.test_entry.bind("<Return>", lambda e: self.test_search())
+        
+        test_btn = tk.Button(input_frame, text="🔍 Suche", 
+                            bg=Config.BG_BUTTON, fg=Config.FG_BUTTON,
+                            font=("Segoe UI", 11, "bold"),
+                            command=self.test_search)
+        test_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Ergebnisanzeige
+        result_frame = tk.Frame(test_frame, bg=Config.BG_PANEL)
+        result_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        self.test_result = scrolledtext.ScrolledText(result_frame, height=8,
+                                                     bg=Config.BG_INPUT, fg=Config.FG,
+                                                     font=("Segoe UI", 9), wrap=tk.WORD)
+        self.test_result.pack(fill=tk.BOTH, expand=True)
+        self.test_result.insert(tk.END, "Hier erscheinen die Suchergebnisse...")
+    
+    def _on_entry_click(self, event):
+        """Entfernt Platzhaltertext beim Anklicken"""
+        if self.test_entry.get() == "Suchbegriff eingeben...":
+            self.test_entry.delete(0, tk.END)
+            self.test_entry.config(fg=Config.FG)
+    
+    def _on_entry_leave(self, event):
+        """Fügt Platzhaltertext ein wenn leer"""
+        if not self.test_entry.get():
+            self.test_entry.insert(0, "Suchbegriff eingeben...")
+            self.test_entry.config(fg=Config.FG_DIM)
+    
+    def toggle_external(self):
+        """Aktiviert/deaktiviert externe Recherche global"""
+        self.sim.external.use_external = self.use_external_var.get()
+        status = "aktiviert" if self.sim.external.use_external else "deaktiviert"
+        print(f"🌐 Externe Recherche {status}")
+    
+    def toggle_source(self, source_key: str):
+        """Aktiviert/deaktiviert eine einzelne Quelle"""
+        enabled = self.source_vars[source_key].get()
+        self.sim.external.toggle_source(source_key, enabled)
+        
+        # Status in GUI aktualisieren (einfach durch Neuzeichnen)
+        self._setup_ui()
+    
+    def test_search(self):
+        """Führt eine Test-Suche durch"""
+        query = self.test_entry.get()
+        if not query or query == "Suchbegriff eingeben...":
+            messagebox.showwarning("Achtung", "Bitte einen Suchbegriff eingeben!")
+            return
+        
+        self.test_result.delete(1.0, tk.END)
+        self.test_result.insert(tk.END, "🔍 Suche läuft...\n")
+        self.frame.update()
+        
+        # Temporär externe Suche aktivieren für Test
+        old_use = self.sim.external.use_external
+        old_sources = {}
+        for key in self.sim.external.sources:
+            old_sources[key] = self.sim.external.sources[key]["enabled"]
+            self.sim.external.sources[key]["enabled"] = True
+        
+        self.sim.external.use_external = True
+        
+        try:
+            results = self.sim.external.search(query)
+            formatted = self.sim.external.format_results(results)
+            self.test_result.delete(1.0, tk.END)
+            self.test_result.insert(tk.END, formatted if formatted else "Keine Ergebnisse gefunden.")
+        except Exception as e:
+            self.test_result.delete(1.0, tk.END)
+            self.test_result.insert(tk.END, f"❌ Fehler: {str(e)}")
+        finally:
+            self.sim.external.use_external = old_use
+            for key in old_sources:
+                self.sim.external.sources[key]["enabled"] = old_sources[key]
+
 # ===================== GUI =====================
 class SynthAgoraGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("🐟 SynthAgora - Mit Knowledge Graph")
+        self.root.title("🐟 SynthAgora - Mit Knowledge Graph & Externen Quellen")
         self.root.geometry("1400x900")
         self.root.configure(bg=Config.BG_MAIN)
         
@@ -1022,9 +1489,13 @@ class SynthAgoraGUI:
         self.notebook.add(self.tab_knowledge, text="🔮 Knowledge Graph")
         self._setup_knowledge_tab()
         
-        # TAB 5: KONFIGURATION
+        # TAB 5: KONFIGURATION (LLM Provider)
         self.config_tab = ConfigTab(self.notebook, self.sim)
-        self.notebook.add(self.config_tab.frame, text="⚙️ Konfiguration")
+        self.notebook.add(self.config_tab.frame, text="⚙️ LLM Config")
+        
+        # TAB 6: EXTERNE QUELLEN
+        self.external_tab = ExternalSourcesTab(self.notebook, self.sim)
+        self.notebook.add(self.external_tab.frame, text="🌐 Externe Quellen")
         
         self._setup_control_bar()
         self._setup_statusbar()
@@ -1057,6 +1528,18 @@ class SynthAgoraGUI:
         
         self.load_mod_btn = self._create_button(mod_select_frame, "🎭 LADEN", Config.BG_INPUT, self.load_selected_moderator)
         self.load_mod_btn.pack(side=tk.LEFT)
+        
+        # Externe Quellen Option in der Debatte
+        external_frame = tk.Frame(self.tab_main, bg=Config.BG_MAIN)
+        external_frame.pack(fill=tk.X, padx=20, pady=5)
+        
+        self.use_external_debate_var = tk.BooleanVar(value=False)
+        external_check = tk.Checkbutton(external_frame, text="🌐 Externe Quellen in dieser Debatte verwenden", 
+                                       variable=self.use_external_debate_var,
+                                       bg=Config.BG_MAIN, fg=Config.FG,
+                                       selectcolor=Config.BG_MAIN,
+                                       font=("Segoe UI", 11))
+        external_check.pack(side=tk.LEFT, padx=5)
         
         topic_frame = tk.LabelFrame(self.tab_main, text="🎯 Thema", bg=Config.BG_PANEL, fg=Config.FG, font=("Segoe UI", 12, "bold"))
         topic_frame.pack(fill=tk.X, padx=20, pady=10)
@@ -1401,13 +1884,18 @@ class SynthAgoraGUI:
         if use_moderator and not self.sim.moderator:
             messagebox.showwarning("Achtung", "Bitte Moderator laden oder deaktivieren!")
             return
+        
+        # Externe Quellen für diese Debatte aktivieren/deaktivieren
+        self.sim.external.use_external = self.use_external_debate_var.get()
+        
         topic = self.topic_entry.get().strip()
         if not topic:
-            topic = "Analysiere diesen Text aus deiner Perspektive"
-        document = self.doc_text.get(1.0, tk.END).strip()
-        if not document:
-            messagebox.showwarning("Achtung", "Bitte einen Text zum Analysieren eingeben!")
+            messagebox.showwarning("Achtung", "Bitte ein Thema eingeben!")
             return
+            
+        document = self.doc_text.get(1.0, tk.END).strip()
+        # Dokument ist OPTIONAL! Keine Warnung wenn leer.
+        
         rounds = int(self.rounds_var.get())
         
         self.start_btn.config(state=tk.DISABLED)
@@ -1416,12 +1904,16 @@ class SynthAgoraGUI:
         
         self._add_to_chat(f"\n{'='*60}")
         self._add_to_chat(f"🎯 THEMA: {topic}")
-        self._add_to_chat(f"📄 Dokument geladen ({len(document)} Zeichen)")
+        if document:
+            self._add_to_chat(f"📄 Dokument geladen ({len(document)} Zeichen)")
+        else:
+            self._add_to_chat(f"📄 Kein Dokument - reine Themendiskussion")
         if use_moderator and self.sim.moderator:
             self._add_to_chat(f"🎭 Moderator: {self.sim.moderator.name} ({self.sim.moderator.style})")
         else:
             self._add_to_chat(f"👥 Ohne Moderator")
         self._add_to_chat(f"👥 {len(self.sim.agents)} Agenten")
+        self._add_to_chat(f"🌐 Externe Quellen: {'✅ Aktiv' if self.sim.external.use_external else '❌ Inaktiv'}")
         self._add_to_chat(f"📚 Agenten lernen mit ZENTRALEM KNOWLEDGE GRAPH")
         for agent in self.sim.agents:
             if agent.learned_facts:

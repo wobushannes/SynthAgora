@@ -14,35 +14,59 @@
     "Optimierte Meta-Daten verbessern die Relevanz und reduzieren Absprungraten, was indirekt Page Speed beeinflusst.",
     "Mobile Optimierung des Title Tags ist entscheidend, da Google mobile Ergebnisse priorisiert und Nutzerverhalten beeinflusst.",
     "Hochwertiger Content ist entscheidend für SEO-Erfolg – Meta-Daten allein reichen nicht aus.",
-    "Strukturierte Daten (Schema Markup) sind entscheidend für Rich Snippets und erweitern die Sichtbarkeit in Suchergebnissen."
+    "Strukturierte Daten (Schema Markup) sind entscheidend für Rich Snippets und erweitern die Sichtbarkeit in Suchergebnissen.",
+    "Eine klare H-Struktur ist entscheidend für User Experience und somit indirekt auch für Rankings.",
+    "Interne Links verteilen PageRank/Autorität und verbessern die Nutzerführung – ein wichtiger SEO-Faktor!",
+    "Schlechte Meta-Daten können indirekt die Ladegeschwindigkeit und Web Vitals negativ beeinflussen.",
+    "Mobile User Experience ist heute entscheidend für Rankings und sollte oberste Priorität haben.",
+    "Meta-Beschreibungen sind wichtig für CTR und Ranking – sie sollten präzise und ansprechend sein.",
+    "Strukturierte Daten ergänzen Title-Tags & Meta-Beschreibungen für bessere Rich Snippets und höhere Sichtbarkeit!",
+    "Überschriften (H-Struktur) sind entscheidend für Keyword-Orientierung, Meta-Beschreibungen und somit das Ranking.",
+    "Interne Verlinkung ist essenziell: Sie verteilt Autorität und ermöglicht Keyword-optimierte Ankertexte für bessere Sichtbarkeit.",
+    "Geschwindigkeit & Nutzererfahrung sind entscheidend, auch Meta-Beschreibungen müssen optimiert sein, um Clickrate zu erhalten.",
+    "Mobile Nutzererfahrung ist entscheidend, da Google sie priorisiert und schlechte UX Rankings schadet.",
+    "Auch hochwertiger Content braucht Keyword-Optimierung, um gefunden und relevant für Nutzer zu sein.",
+    "Strukturierte Daten sind entscheidend für Rich Snippets und kontextuelle Inhaltsverbesserung, über reine Meta-Daten hinaus."
   ],
   "positions": {
     "Überschriften-Hans": [
       "Überschriften-Hans liefert eine spezifische, kontextbezogene Analyse zu Marias Meta-Beschreibung.",
       "Meta-Daten und eine klare H-Struktur müssen Hand in Hand arbeiten, um Nutzer zum Klicken & Lesen zu bewegen.",
-      "Eine klare Überschriftenstruktur (H-Struktur) ist entscheidend für die Nutzerführung und somit für den Erfolg."
+      "Eine klare Überschriftenstruktur (H-Struktur) ist entscheidend für die Nutzerführung und somit für den Erfolg.",
+      "Eine klare H-Struktur ist entscheidend für User Experience und somit indirekt auch für Rankings.",
+      "Überschriften (H-Struktur) sind entscheidend für Keyword-Orientierung, Meta-Beschreibungen und somit das Ranking."
     ],
     "Link-Lena": [
       "Link-Lena ist eine Persönlichkeit, die sich um Links und vermutlich SEO dreht – ein potenzieller Verbündeter oder Informationsquelle.",
       "Interne Links sind wichtig für die Seitenautorität und somit indirekt auch für das Ranking bei Google.",
-      "Interne Verlinkung ist essenziell für Autorität und Content-Bewertung – nicht nur CTR durch Meta-Daten."
+      "Interne Verlinkung ist essenziell für Autorität und Content-Bewertung – nicht nur CTR durch Meta-Daten.",
+      "Interne Links verteilen PageRank/Autorität und verbessern die Nutzerführung – ein wichtiger SEO-Faktor!",
+      "Interne Verlinkung ist essenziell: Sie verteilt Autorität und ermöglicht Keyword-optimierte Ankertexte für bessere Sichtbarkeit."
     ],
     "Ladezeit-Lars": [
       "Ladezeiten sind wichtig und werden von Experten (wie Ladezeit-Lars) ernst genommen – optimieren wir sie!",
       "Geschwindigkeit und Meta-Daten sind untrennbar verbunden: Langsamkeit mindert auch optimierte Meta-Informationen.",
-      "Optimierte Meta-Daten verbessern die Relevanz und reduzieren Absprungraten, was indirekt Page Speed beeinflusst."
+      "Optimierte Meta-Daten verbessern die Relevanz und reduzieren Absprungraten, was indirekt Page Speed beeinflusst.",
+      "Schlechte Meta-Daten können indirekt die Ladegeschwindigkeit und Web Vitals negativ beeinflussen.",
+      "Geschwindigkeit & Nutzererfahrung sind entscheidend, auch Meta-Beschreibungen müssen optimiert sein, um Clickrate zu erhalten."
     ],
     "Mobile-Mike": [
       "Mobile User Experience (CTR & Relevanz) beeinflusst das Ranking, da Google Mobile-First indexiert.",
-      "Mobile Optimierung des Title Tags ist entscheidend, da Google mobile Ergebnisse priorisiert und Nutzerverhalten beeinflusst."
+      "Mobile Optimierung des Title Tags ist entscheidend, da Google mobile Ergebnisse priorisiert und Nutzerverhalten beeinflusst.",
+      "Mobile User Experience ist heute entscheidend für Rankings und sollte oberste Priorität haben.",
+      "Mobile Nutzererfahrung ist entscheidend, da Google sie priorisiert und schlechte UX Rankings schadet."
     ],
     "Content-Clara": [
       "Hochwertiger Content UND optimierte Meta-Beschreibungen sind entscheidend für gute Rankings und Click-Through-Rates.",
-      "Hochwertiger Content ist entscheidend für SEO-Erfolg – Meta-Daten allein reichen nicht aus."
+      "Hochwertiger Content ist entscheidend für SEO-Erfolg – Meta-Daten allein reichen nicht aus.",
+      "Meta-Beschreibungen sind wichtig für CTR und Ranking – sie sollten präzise und ansprechend sein.",
+      "Auch hochwertiger Content braucht Keyword-Optimierung, um gefunden und relevant für Nutzer zu sein."
     ],
     "Schema-Steffi": [
       "Strukturierte Daten sind essenziell für Rich Snippets und ergänzen Meta-Daten, kompensieren sie aber nicht.",
-      "Strukturierte Daten (Schema Markup) sind entscheidend für Rich Snippets und erweitern die Sichtbarkeit in Suchergebnissen."
+      "Strukturierte Daten (Schema Markup) sind entscheidend für Rich Snippets und erweitern die Sichtbarkeit in Suchergebnissen.",
+      "Strukturierte Daten ergänzen Title-Tags & Meta-Beschreibungen für bessere Rich Snippets und höhere Sichtbarkeit!",
+      "Strukturierte Daten sind entscheidend für Rich Snippets und kontextuelle Inhaltsverbesserung, über reine Meta-Daten hinaus."
     ]
   },
   "perspectives": [],

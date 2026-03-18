@@ -23,44 +23,80 @@
     "Relevante Keywords sind entscheidend für Sichtbarkeit und Nutzerzufriedenheit – beides beeinflusst die Ladegeschwindigkeit indirekt.",
     "Mobile Nutzererfahrung und relevante Keywords sind entscheidend für mobile Indexierung und Sichtbarkeit bei Google.",
     "Hochwertiger Content braucht Keyword-Fokus, um gefunden zu werden und die Sichtbarkeit zu erhöhen.",
-    "Strukturierte Daten sind entscheidend für Rich Snippets und somit für bessere Sichtbarkeit."
+    "Strukturierte Daten sind entscheidend für Rich Snippets und somit für bessere Sichtbarkeit.",
+    "Eine klare Überschriftenstruktur (H2/H3) ist essenziell für Lesbarkeit und Suchmaschinenverständnis.",
+    "Interne Verlinkung verteilt Seitenautorität und verstärkt Keyword-Effekte – sie ist essenziell für den Erfolg!",
+    "Geschwindigkeit und Content sind untrennbar verbunden: Langsame Seiten schaden SEO und Nutzererfahrung gleichermaßen.",
+    "Mobile Optimierung ist entscheidend, da Google mobile Versionen bevorzugt und schlechte UX Rankings schadet.",
+    "Hochwertiger Content braucht Keyword-Fokus, um sichtbar zu sein und langfristigen Erfolg zu erzielen.",
+    "Strukturierte Daten sind entscheidend, um Rich Snippets zu erhalten und die Sichtbarkeit zu verbessern.",
+    "Eine klare Überschriftenstruktur ist entscheidend für Lesbarkeit und indirekt auch für ein gutes Ranking.",
+    "Interne Links stärken Seiten, verteilen Autorität & sollten thematisch relevanten Inhalten folgen.",
+    "Ladezeit und Keyword-Optimierung müssen Hand in Hand gehen, um Traffic und Nutzerzufriedenheit zu gewährleisten.",
+    "Mobile Optimierung ist entscheidend für Rankings, da Google mobile Inhalte priorisiert und User Experience beeinflusst.",
+    "Hochwertiger Inhalt braucht eine Keyword-Strategie, um im Suchraum gefunden zu werden.",
+    "Strukturierte Daten sind entscheidend für Rich Snippets und verbessern die Sichtbarkeit in Suchergebnissen.",
+    "Eine klare Überschriftenstruktur (H1-H6) ist entscheidend für Lesbarkeit und Suchmaschinenverständnis.",
+    "Interne Links sollten präzise formuliert sein, um Autorität zu verteilen und relevante Ankertexte zu ermöglichen.",
+    "Nutzererfahrung und schnelle Ladezeiten sind entscheidend, Keyword-Optimierung allein reicht nicht.",
+    "Mobile Optimierung ist entscheidend, da Google Webseiten primär für Mobilgeräte bewertet.",
+    "Hochwertiger Inhalt allein reicht nicht; Keyword-Fokus und Struktur sind für die Auffindbarkeit entscheidend.",
+    "Strukturierte Daten sind essenziell, um Rich Snippets zu erzielen und Sichtbarkeit für Suchmaschinen zu verbessern."
   ],
   "positions": {
     "Überschriften-Hans": [
       "Ich muss meine Meta-Beschreibungen stärker auf die von SEO-Analysten (Dr. Keywords) identifizierten Schlüsselwörter abstimmen.",
       "Ich lerne, dass Meta-Beschreibungen mehr Substanz benötigen, um SEO-Erfolge zu erzielen.",
       "Klare Überschriften (H-Struktur) sind essentiell für Lesbarkeit und SEO – sie bilden das Fundament des Textes.",
-      "Eine klare Keyword-Basis ist essenziell für eine strukturierte, informative und SEO-optimierte Überschriftenhierarchie."
+      "Eine klare Keyword-Basis ist essenziell für eine strukturierte, informative und SEO-optimierte Überschriftenhierarchie.",
+      "Eine klare Überschriftenstruktur (H2/H3) ist essenziell für Lesbarkeit und Suchmaschinenverständnis.",
+      "Eine klare Überschriftenstruktur ist entscheidend für Lesbarkeit und indirekt auch für ein gutes Ranking.",
+      "Eine klare Überschriftenstruktur (H1-H6) ist entscheidend für Lesbarkeit und Suchmaschinenverständnis."
     ],
     "Link-Lena": [
       "Ich verstehe, dass ich Inhalte im Kontext von Anmerkungen und Einschätzungen anderer generieren soll.",
       "Ich lerne, dass ich mich an spezifisches Feedback und Perspektiven (wie von \"Link-Lena\") anpassen muss.",
       "Interne Verlinkungen sind wichtig, aber nur mit passenden Keywords und Ankertexten wirklich wirksam.",
-      "Interne Verlinkung ist essenziell, um Autorität zu verteilen und optimierte Inhalte langfristig sichtbar zu machen."
+      "Interne Verlinkung ist essenziell, um Autorität zu verteilen und optimierte Inhalte langfristig sichtbar zu machen.",
+      "Interne Verlinkung verteilt Seitenautorität und verstärkt Keyword-Effekte – sie ist essenziell für den Erfolg!",
+      "Interne Links stärken Seiten, verteilen Autorität & sollten thematisch relevanten Inhalten folgen.",
+      "Interne Links sollten präzise formuliert sein, um Autorität zu verteilen und relevante Ankertexte zu ermöglichen."
     ],
     "Ladezeit-Lars": [
       "Ich lerne, dass es wichtig ist, auf die Bedürfnisse und Hinweise von Kollegen (wie Lars) zu achten.",
       "Meta-Beschreibungen müssen überzeugender Content mit relevanten Keywords sein, um Nutzer anzuziehen und das Ranking zu verbessern.",
       "Keyword-Fokus und schnelle Ladezeiten verbessern das Nutzererlebnis und steigern somit das Ranking.",
-      "Relevante Keywords sind entscheidend für Sichtbarkeit und Nutzerzufriedenheit – beides beeinflusst die Ladegeschwindigkeit indirekt."
+      "Relevante Keywords sind entscheidend für Sichtbarkeit und Nutzerzufriedenheit – beides beeinflusst die Ladegeschwindigkeit indirekt.",
+      "Geschwindigkeit und Content sind untrennbar verbunden: Langsame Seiten schaden SEO und Nutzererfahrung gleichermaßen.",
+      "Ladezeit und Keyword-Optimierung müssen Hand in Hand gehen, um Traffic und Nutzerzufriedenheit zu gewährleisten.",
+      "Nutzererfahrung und schnelle Ladezeiten sind entscheidend, Keyword-Optimierung allein reicht nicht."
     ],
     "Mobile-Mike": [
       "Kurze Texte ohne Keywords sind SEO-inaktiv und benötigen mehr Inhalt für ein gutes Ranking.",
       "Ich muss Inhalte erstellen, die nicht nur informieren, sondern auch Suchmaschinen optimieren.",
       "Mobile Nutzererfahrung und Keyword-Optimierung sind essenziell – Google priorisiert mobile Indexierung.",
-      "Mobile Nutzererfahrung und relevante Keywords sind entscheidend für mobile Indexierung und Sichtbarkeit bei Google."
+      "Mobile Nutzererfahrung und relevante Keywords sind entscheidend für mobile Indexierung und Sichtbarkeit bei Google.",
+      "Mobile Optimierung ist entscheidend, da Google mobile Versionen bevorzugt und schlechte UX Rankings schadet.",
+      "Mobile Optimierung ist entscheidend für Rankings, da Google mobile Inhalte priorisiert und User Experience beeinflusst.",
+      "Mobile Optimierung ist entscheidend, da Google Webseiten primär für Mobilgeräte bewertet."
     ],
     "Content-Clara": [
       "Ich lerne, dass ich eine spezifische Rolle (Meta-Beschreibungs-Maria) einnehme und auf Input von anderen Bezug nehme.",
       "Ich lerne, dass Expertenwissen (Dr. Keyword) die Grundlage für gute Meta-Beschreibungen liefert.",
       "Keyword-Fokus, H1-Überschriften und Content-Qualität sind entscheidend für ein gutes Ranking.",
-      "Hochwertiger Content braucht Keyword-Fokus, um gefunden zu werden und die Sichtbarkeit zu erhöhen."
+      "Hochwertiger Content braucht Keyword-Fokus, um gefunden zu werden und die Sichtbarkeit zu erhöhen.",
+      "Hochwertiger Content braucht Keyword-Fokus, um sichtbar zu sein und langfristigen Erfolg zu erzielen.",
+      "Hochwertiger Inhalt braucht eine Keyword-Strategie, um im Suchraum gefunden zu werden.",
+      "Hochwertiger Inhalt allein reicht nicht; Keyword-Fokus und Struktur sind für die Auffindbarkeit entscheidend."
     ],
     "Schema-Steffi": [
       "Meta-Beschreibungen brauchen relevante Keywords und ausreichend Länge für SEO-Erfolg.",
       "Eine reine Unternehmensvorstellung ist für SEO zu schwach; Inhalte müssen mehr bieten, um zu ranken.",
       "Strukturierte Daten sind wichtig, aber Keyword-Recherche ist die Grundlage für Sichtbarkeit und Erfolg.",
-      "Strukturierte Daten sind entscheidend für Rich Snippets und somit für bessere Sichtbarkeit."
+      "Strukturierte Daten sind entscheidend für Rich Snippets und somit für bessere Sichtbarkeit.",
+      "Strukturierte Daten sind entscheidend, um Rich Snippets zu erhalten und die Sichtbarkeit zu verbessern.",
+      "Strukturierte Daten sind entscheidend für Rich Snippets und verbessern die Sichtbarkeit in Suchergebnissen.",
+      "Strukturierte Daten sind essenziell, um Rich Snippets zu erzielen und Sichtbarkeit für Suchmaschinen zu verbessern."
     ]
   },
   "perspectives": [],
