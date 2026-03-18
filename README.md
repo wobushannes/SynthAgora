@@ -38,12 +38,22 @@ Dokumente (/examples/): Einfache .txt-Dateien als Diskussionsgrundlage
 Provider: Im GUI-Konfigurations-Tab wählbar (LM Studio, Ollama, OpenAI/BETA, Grok/BETA, Claude/BETA)
 
 📁 Projektstruktur
-SynthAgora/
-├── main.py
-├── includes/config.py
-├── agents/           # Agenten-JSONs
-├── moderators/       # Moderator-JSONs
-├── examples/         # Dokumente (.txt)
-├── exports/          # Chat-Verläufe
-├── memory/           # Agenten-Gedächtnis
-└── knowledge_graph/  # Zentraler Knowledge Graph
+synthagora/
+│
+├── main.py                          # Hauptprogramm (bleibt im Hauptordner)
+├── config.json                       # Konfigurationsdatei (JSON)
+│
+├── includes/                          # ALLES was importiert wird
+│   ├── config.py                       # ← HIER hin mit der config.py!
+│   │
+│   └── plugins/                         # Plugin-Ordner
+│       ├── __init__.py
+│       ├── wikipedia_plugin.py
+│       ├── arxiv_simple.py
+│
+├── agents/                             # Agenten-JSONs
+├── moderators/                          # Moderator-JSONs
+├── examples/                            # Beispiel-Dokumente
+├── memory/                               # Agenten-Erinnerungen
+├── knowledge_graph/                      # Knowledge Graph Daten
+└── exports/                              # Exportierte Diskussionen
