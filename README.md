@@ -4,7 +4,10 @@
 
 [![Python Version](https://img.shields.io/badge/Python-3.9%2B-blue)](https://www.python.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE) [![LLM Backend](https://img.shields.io/badge/LLM-LM%20Studio%20%7C%20Ollama-orange)](https://lmstudio.ai/) [![Project Status](https://img.shields.io/badge/Status-Active-brightgreen)]() [![GitHub last commit](https://img.shields.io/github/last-commit/wobushannes/SynthAgora)]()
 
-👉 **[Demo-Video auf YouTube](https://youtu.be/DIhA5LQgyPM)**
+Demo-Videos
+https://youtu.be/tOpyBrfHHLk - Anlegen / Generieren von Agenten
+https://youtu.be/9_4zHuqD3VM - Debatten / Konfiguration - Anlegen
+
 
 ## ✨ Features
 ✅ **Echtes Agenten-Gedächtnis** – Jeder Agent merkt sich, was er und andere gesagt haben  
@@ -34,26 +37,39 @@ python main.py
 ⚙️ Konfiguration
 Agenten (/agents/): Jeder Agent als JSON mit name, role, personality, color, goals, fears
 Moderatoren (/moderators/): Definieren Interventionsstile, max_evasions, abbrechen_nach
-Dokumente (/examples/): Einfache .txt-Dateien als Diskussionsgrundlage
 Provider: Im GUI-Konfigurations-Tab wählbar (LM Studio, Ollama, OpenAI/BETA, Grok/BETA, Claude/BETA)
 
-📁 Projektstruktur
-synthagora/
+SynthAgora/
 │
-├── main.py                          # Hauptprogramm (bleibt im Hauptordner)
-├── config.json                       # Konfigurationsdatei (JSON)
+├── main.py                          # Hauptprogramm (GUI)
+├── config.json                      # (optional) Konfiguration
 │
-├── includes/                          # ALLES was importiert wird
-│   ├── config.py                       # ← HIER hin mit der config.py!
-│   │
-│   └── plugins/                         # Plugin-Ordner
-│       ├── __init__.py
-│       ├── wikipedia_plugin.py
-│       ├── arxiv_simple.py
+├── agents/                          # Generierte Agenten-Sets (JSON)
+├── moderators/                      # Moderator-Definitionen (JSON)
+├── examples/                        # Beispiel-Dokumente (TXT)
+├── exports/                         # Exportierte Ergebnisse
+├── memory/                          # Alte Memory-Dateien
+├── knowledge/                       # Datenbank und KG
+│   └── synthagora.db                # SQLite Datenbank
 │
-├── agents/                             # Agenten-JSONs
-├── moderators/                          # Moderator-JSONs
-├── examples/                            # Beispiel-Dokumente
-├── memory/                               # Agenten-Erinnerungen
-├── knowledge_graph/                      # Knowledge Graph Daten
-└── exports/                              # Exportierte Diskussionen
+└── includes/                        # ⬅️ HIER liegen ALLE Module
+    ├── __init__.py                  # Modul-Initialisierung
+    ├── config.py                    # Konfiguration
+    ├── database.py                  # SQLite-Datenbank
+    ├── agent.py                     # Agent-Klasse
+    ├── agent_factory.py             # Agenten-Generierung
+    ├── knowledge_graph.py           # Knowledge Graph
+    ├── task_manager.py              # Analyse-Jobs
+    ├── migrate.py                   # Migration Tool
+    ├── role_pools.py               
+    ├── plugins.py                   # Plugin-Manager
+    ├── wikipedia_plugin.py          # Wikipedia-Plugin
+    ├── arxiv_simple.py              # arXiv-Plugin
+    ├── simulation.py                # NEU: Simulations-Kern
+    ├── document_loader.py           # NEU: Dokumente laden (URL/PDF)
+    ├── debate_formats.py            # NEU: Debatten-Formate
+    ├── debate_controller.py         # NEU: Timer, Rednerliste, Sanktionen
+    ├── result_analyzer.py           # NEU: Thesen, Konsens, Sentiment
+    └── visualization.py             # NEU: Netzwerk, Heatmap, Export
+
+
