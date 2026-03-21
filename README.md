@@ -4,7 +4,7 @@
 
 [![Python Version](https://img.shields.io/badge/Python-3.9%2B-blue)](https://www.python.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE) [![LLM Backend](https://img.shields.io/badge/LLM-LM%20Studio%20%7C%20Ollama-orange)](https://lmstudio.ai/) [![Project Status](https://img.shields.io/badge/Status-Active-brightgreen)]() [![GitHub last commit](https://img.shields.io/github/last-commit/wobushannes/SynthAgora)]()
 
-Demo-Videos
+## 📋 Demos
 
 https://youtu.be/tOpyBrfHHLk - Anlegen / Generieren von Agenten
 
