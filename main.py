@@ -2,8 +2,6 @@
 # -*- coding: utf-8 -*-
 """
 SynthAgora - Haupt-GUI
-- Enthält die gesamte Benutzeroberfläche
-- Simulation ist ausgelagert in simulation.py
 """
 
 import tkinter as tk
@@ -27,7 +25,6 @@ from datetime import datetime
 from typing import List, Dict, Optional, Any
 from collections import Counter
 
-# Eigene Module
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from includes.config import Config
 from includes.simulation import Simulation, ProgressManager, Moderator
@@ -37,15 +34,15 @@ from includes.agent import Agent
 from includes.debate_formats import get_available_formats
 from includes.result_analyzer import ResultAnalyzer
 from includes.visualization import Visualization
-
-
-# ==================== DATEI-MANAGER ====================
+from includes.synthesis_tab import SynthesisTab
+from includes.legal_analysis_tab import LegalAnalysisTab
 
 class FileManager:
     def __init__(self):
         for folder in [Config.AGENTS_FOLDER, Config.MODERATORS_FOLDER, 
                        Config.EXAMPLES_FOLDER, Config.EXPORTS_FOLDER,
-                       Config.MEMORY_FOLDER, Config.KNOWLEDGE_FOLDER]:
+                       Config.MEMORY_FOLDER, Config.KNOWLEDGE_FOLDER,
+                       Config.PROJECTS_FOLDER]:
             if not os.path.exists(folder):
                 os.makedirs(folder)
     
@@ -71,8 +68,6 @@ class FileManager:
         except:
             return None
 
-
-# ==================== GEDÄCHTNIS-PALAST TAB ====================
 
 class MemoryPalaceTab:
     def __init__(self, parent, sim):
@@ -229,6 +224,7 @@ class MemoryPalaceTab:
         self.load_memories(agent['agent_id'])
     
     def load_memories(self, agent_id: str):
+        """Lädt Erinnerungen eines Agenten und aktualisiert Anzeige"""
         try:
             memories = self.sim.db.get_agent_memories(agent_id)
             count = len(memories)
@@ -287,8 +283,6 @@ class MemoryPalaceTab:
         self.current_agent_id = None
 
 
-# ==================== AGENT PROFILE WINDOW ====================
-
 class AgentProfileWindow:
     def __init__(self, parent, sim, agent):
         self.parent = parent
@@ -334,6 +328,16 @@ class AgentProfileWindow:
         self.stats_text = scrolledtext.ScrolledText(stats_frame, font=("Consolas", 10))
         self.stats_text.pack(fill=BOTH, expand=True, padx=10, pady=10)
         
+        citations_frame = tb.Frame(notebook)
+        notebook.add(citations_frame, text="📚 Zitate")
+        self.citations_text = scrolledtext.ScrolledText(citations_frame, font=("Consolas", 10))
+        self.citations_text.pack(fill=BOTH, expand=True, padx=10, pady=10)
+        
+        external_citations_frame = tb.Frame(notebook)
+        notebook.add(external_citations_frame, text="📖 Externe Zitate")
+        self.external_citations_text = scrolledtext.ScrolledText(external_citations_frame, font=("Consolas", 10))
+        self.external_citations_text.pack(fill=BOTH, expand=True, padx=10, pady=10)
+        
         tb.Button(self.window, text="Schließen", command=self.window.destroy, bootstyle="secondary").pack(pady=10)
     
     def _load_data(self):
@@ -342,6 +346,12 @@ class AgentProfileWindow:
         skills = self.sim.db.get_agent_skills(agent_id)
         evolution = self.sim.db.get_agent_evolution(agent_id)
         expertise = self.sim.db.get_agent_expertise(agent_id)
+        citations = self.sim.db.get_agent_citations(agent_id, 50)
+        external_citations = self.sim.db.get_agent_external_citations(agent_id, 50)
+        citation_stats = self.sim.db.get_citation_stats(agent_id)
+        
+        doc_citations = citation_stats.get('document_citations', 0)
+        ext_citations = citation_stats.get('external_citations', 0)
         
         self.profile_text.insert(1.0, f"""
 📋 AGENTEN-PROFIL
@@ -369,6 +379,9 @@ ZIELE:
 STATUS:
   • Beiträge: {len(self.agent.schon_gesagtes)}
   • Gelernte Fakten: {len(self.agent.learned_facts)}
+  • Dokumenten-Zitate insgesamt: {doc_citations}
+  • Externe Zitate insgesamt: {ext_citations}
+  • Zitat-Punkte: {self.agent.total_citation_points}
 """)
         self.profile_text.config(state=DISABLED)
         
@@ -421,6 +434,8 @@ STATUS:
                 mem_text += f"{i}. 📌 {mem.get('fact', '')[:200]}\n"
                 mem_text += f"   📚 Thema: {mem.get('topic', 'unbekannt')}\n"
                 mem_text += f"   ⭐ Wichtigkeit: {mem.get('importance', 0.5):.2f}\n"
+                if mem.get('source_project'):
+                    mem_text += f"   📁 Quelle: {mem.get('source_project')}/{mem.get('source_document', '')}\n"
                 mem_text += f"   📅 Gelernt: {mem.get('created_at', 'unbekannt')[:19]}\n\n"
         else:
             mem_text = "💎 Noch keine gelernten Fakten."
@@ -463,9 +478,480 @@ STATUS:
         
         self.stats_text.insert(1.0, stats_text)
         self.stats_text.config(state=DISABLED)
+        
+        citations_text = f"📚 DOKUMENTEN-ZITATE ({len(citations)})\n\n"
+        if citations:
+            for cit in citations[:20]:
+                citations_text += f"  • {cit.get('quoted_text', '')[:100]}\n"
+                citations_text += f"    📁 {cit.get('project', '?')}/{cit.get('document', '?')}\n"
+                citations_text += f"    ⭐ Genauigkeit: {cit.get('accuracy', 0)*100:.0f}% | Punkte: {cit.get('points_awarded', 0)}\n\n"
+        else:
+            citations_text += "  Keine Dokumenten-Zitate vorhanden.\n"
+        
+        self.citations_text.insert(1.0, citations_text)
+        self.citations_text.config(state=DISABLED)
+        
+        ext_citations_text = f"📖 EXTERNE ZITATE ({len(external_citations)})\n\n"
+        if external_citations:
+            for cit in external_citations[:20]:
+                ext_citations_text += f"  • {cit.get('source', '?')}\n"
+                if cit.get('quoted_text'):
+                    ext_citations_text += f"    💬 {cit.get('quoted_text', '')[:100]}\n"
+                if cit.get('reference'):
+                    ext_citations_text += f"    📖 {cit.get('reference', '')[:100]}\n"
+                ext_citations_text += f"    📅 {cit.get('created_at', 'unbekannt')[:19]}\n\n"
+        else:
+            ext_citations_text += "  Keine externen Zitate vorhanden.\n"
+        
+        self.external_citations_text.insert(1.0, ext_citations_text)
+        self.external_citations_text.config(state=DISABLED)
 
 
-# ==================== ANALYSIS RESULT WINDOW ====================
+class ProjectsTab:
+    def __init__(self, parent, sim):
+        self.parent = parent
+        self.sim = sim
+        self.frame = tb.Frame(parent)
+        self.current_project = None
+        self._setup_ui()
+        self._refresh_project_list()
+    
+    def _setup_ui(self):
+        main_panel = tb.Panedwindow(self.frame, orient=HORIZONTAL)
+        main_panel.pack(fill=BOTH, expand=True, padx=10, pady=10)
+        
+        left_frame = tb.Frame(main_panel, width=350)
+        main_panel.add(left_frame, weight=1)
+        
+        header_frame = tb.Frame(left_frame)
+        header_frame.pack(fill=X, pady=(0,10))
+        tb.Label(header_frame, text="📁 PROJEKTE", font=("Segoe UI", 16, "bold")).pack(side=LEFT)
+        refresh_btn = tb.Button(header_frame, text="🔄", width=3, command=self._refresh_project_list, bootstyle="info")
+        refresh_btn.pack(side=RIGHT)
+        
+        create_frame = tb.Frame(left_frame)
+        create_frame.pack(fill=X, pady=5)
+        self.new_project_name = tb.Entry(create_frame, font=("Segoe UI", 10))
+        self.new_project_name.pack(side=LEFT, fill=X, expand=True, padx=(0,5))
+        self.new_project_name.insert(0, "Neues Projekt...")
+        tb.Button(create_frame, text="➕", command=self._create_project, bootstyle="success", width=3).pack(side=RIGHT)
+        
+        list_frame = tb.LabelFrame(left_frame, text="📋 Projektliste")
+        list_frame.pack(fill=BOTH, expand=True, pady=5)
+        
+        self.project_listbox = tk.Listbox(list_frame, font=("Consolas", 10), selectmode=tk.SINGLE, height=12)
+        self.project_listbox.pack(side=LEFT, fill=BOTH, expand=True, padx=5, pady=5)
+        scrollbar = tb.Scrollbar(list_frame, orient=VERTICAL)
+        scrollbar.pack(side=RIGHT, fill=Y)
+        self.project_listbox.config(yscrollcommand=scrollbar.set)
+        scrollbar.config(command=self.project_listbox.yview)
+        self.project_listbox.bind('<<ListboxSelect>>', self._on_project_select)
+        
+        right_frame = tb.Frame(main_panel)
+        main_panel.add(right_frame, weight=3)
+        
+        self.project_header = tb.Label(right_frame, text="Kein Projekt ausgewählt", font=("Segoe UI", 14, "bold"))
+        self.project_header.pack(anchor=W, pady=(0,10))
+        
+        notebook = tb.Notebook(right_frame)
+        notebook.pack(fill=BOTH, expand=True)
+        
+        docs_frame = tb.Frame(notebook)
+        notebook.add(docs_frame, text="📄 Dokumente")
+        self._setup_docs_tab(docs_frame)
+        
+        search_frame = tb.Frame(notebook)
+        notebook.add(search_frame, text="🔍 Suche")
+        self._setup_search_tab(search_frame)
+        
+        stats_frame = tb.Frame(notebook)
+        notebook.add(stats_frame, text="📊 Statistik")
+        self._setup_stats_tab(stats_frame)
+        
+        btn_frame = tb.Frame(right_frame)
+        btn_frame.pack(fill=X, pady=10)
+        tb.Button(btn_frame, text="📥 Dokument hinzufügen", command=self._add_document, bootstyle="primary", width=20).pack(side=LEFT, padx=5)
+        tb.Button(btn_frame, text="📁 Ordner hinzufügen", command=self._add_folder, bootstyle="primary", width=20).pack(side=LEFT, padx=5)
+        tb.Button(btn_frame, text="🗑️ Projekt löschen", command=self._delete_project, bootstyle="danger", width=20).pack(side=RIGHT, padx=5)
+    
+    def _setup_docs_tab(self, parent):
+        self.docs_listbox = tk.Listbox(parent, font=("Consolas", 9), selectmode=tk.SINGLE, height=15)
+        self.docs_listbox.pack(side=LEFT, fill=BOTH, expand=True, padx=5, pady=5)
+        docs_scroll = tb.Scrollbar(parent, orient=VERTICAL, command=self.docs_listbox.yview)
+        docs_scroll.pack(side=RIGHT, fill=Y)
+        self.docs_listbox.config(yscrollcommand=docs_scroll.set)
+        self.docs_listbox.bind('<<ListboxSelect>>', self._on_doc_select)
+        
+        doc_preview_frame = tb.LabelFrame(parent, text="Vorschau")
+        doc_preview_frame.pack(fill=BOTH, expand=True, padx=5, pady=5)
+        self.doc_preview = scrolledtext.ScrolledText(doc_preview_frame, height=8, font=("Consolas", 9))
+        self.doc_preview.pack(fill=BOTH, expand=True, padx=5, pady=5)
+    
+    def _setup_search_tab(self, parent):
+        search_frame = tb.Frame(parent)
+        search_frame.pack(fill=X, padx=10, pady=10)
+        
+        tb.Label(search_frame, text="Suchanfrage:").pack(anchor=W)
+        self.search_query = tb.Entry(search_frame, font=("Segoe UI", 11))
+        self.search_query.pack(fill=X, pady=5)
+        self.search_query.insert(0, "Suchbegriff...")
+        
+        k_frame = tb.Frame(search_frame)
+        k_frame.pack(fill=X, pady=5)
+        tb.Label(k_frame, text="Anzahl Ergebnisse (k):").pack(side=LEFT)
+        self.search_k = tk.StringVar(value="5")
+        tb.Spinbox(k_frame, from_=1, to=20, textvariable=self.search_k, width=5).pack(side=LEFT, padx=5)
+        
+        tb.Button(search_frame, text="🔍 Suchen", command=self._search_project, bootstyle="primary", width=20).pack(pady=10)
+        
+        self.search_results = scrolledtext.ScrolledText(parent, font=("Consolas", 9), height=15)
+        self.search_results.pack(fill=BOTH, expand=True, padx=10, pady=10)
+    
+    def _setup_stats_tab(self, parent):
+        self.project_stats = scrolledtext.ScrolledText(parent, font=("Consolas", 10))
+        self.project_stats.pack(fill=BOTH, expand=True, padx=10, pady=10)
+    
+    def _refresh_project_list(self):
+        self.project_listbox.delete(0, tk.END)
+        projects = self.sim.list_projects()
+        for proj in projects:
+            name = proj.get('name', '?')
+            docs = proj.get('document_count', 0)
+            chunks = proj.get('chunk_count', 0)
+            self.project_listbox.insert(tk.END, f"📁 {name} | {docs} Docs | {chunks} Chunks")
+    
+    def _create_project(self):
+        name = self.new_project_name.get().strip()
+        if not name or name == "Neues Projekt...":
+            messagebox.showwarning("Achtung", "Bitte Projektnamen eingeben!")
+            return
+        try:
+            self.sim.create_project(name)
+            self._refresh_project_list()
+            self.new_project_name.delete(0, tk.END)
+            self.new_project_name.insert(0, "Neues Projekt...")
+            messagebox.showinfo("Erfolg", f"Projekt '{name}' erstellt!")
+        except Exception as e:
+            messagebox.showerror("Fehler", str(e))
+    
+    def _on_project_select(self, event):
+        selection = self.project_listbox.curselection()
+        if not selection:
+            return
+        line = self.project_listbox.get(selection[0])
+        name = line.split(" | ")[0].replace("📁 ", "")
+        self.current_project = name
+        self.project_header.config(text=f"📁 {name}")
+        self._load_project_docs()
+        self._update_project_stats()
+    
+    def _load_project_docs(self):
+        self.docs_listbox.delete(0, tk.END)
+        if not self.current_project:
+            return
+        
+        project = self.sim.project_manager.get_project(self.current_project)
+        if project:
+            for doc in project.documents:
+                title = doc.get('title', doc.get('source', '?'))
+                chunks = doc.get('chunk_count', 0)
+                self.docs_listbox.insert(tk.END, f"📄 {title[:40]} | {chunks} Chunks")
+    
+    def _on_doc_select(self, event):
+        selection = self.docs_listbox.curselection()
+        if not selection or not self.current_project:
+            return
+        
+        project = self.sim.project_manager.get_project(self.current_project)
+        if project and selection[0] < len(project.documents):
+            doc = project.documents[selection[0]]
+            self.doc_preview.delete(1.0, tk.END)
+            try:
+                with open(doc.get('parsed_path', ''), 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    content = data.get('content', '')[:2000]
+                    self.doc_preview.insert(1.0, content)
+                    if len(data.get('content', '')) > 2000:
+                        self.doc_preview.insert(tk.END, "\n\n... (gekürzt)")
+            except:
+                self.doc_preview.insert(1.0, "Vorschau nicht verfügbar")
+    
+    def _add_document(self):
+        if not self.current_project:
+            messagebox.showwarning("Achtung", "Bitte zuerst ein Projekt auswählen!")
+            return
+        
+        filepath = filedialog.askopenfilename(
+            title="Dokument auswählen",
+            filetypes=[
+                ("Alle unterstützten", "*.txt *.pdf *.md *.html *.htm *.json *.csv"),
+                ("Textdateien", "*.txt"),
+                ("PDF", "*.pdf"),
+                ("Markdown", "*.md"),
+                ("HTML", "*.html *.htm"),
+                ("JSON", "*.json"),
+                ("CSV", "*.csv")
+            ]
+        )
+        if filepath:
+            try:
+                result = self.sim.add_document_to_project(self.current_project, filepath, "file")
+                self._load_project_docs()
+                self._update_project_stats()
+                messagebox.showinfo("Erfolg", f"Dokument hinzugefügt: {result.get('title', filepath)}")
+            except Exception as e:
+                messagebox.showerror("Fehler", str(e))
+    
+    def _add_folder(self):
+        if not self.current_project:
+            messagebox.showwarning("Achtung", "Bitte zuerst ein Projekt auswählen!")
+            return
+        
+        folder = filedialog.askdirectory(title="Ordner mit Dokumenten auswählen")
+        if folder:
+            try:
+                results = self.sim.add_folder_to_project(self.current_project, folder)
+                self._load_project_docs()
+                self._update_project_stats()
+                messagebox.showinfo("Erfolg", f"{len(results)} Dokumente hinzugefügt!")
+            except Exception as e:
+                messagebox.showerror("Fehler", str(e))
+    
+    def _search_project(self):
+        if not self.current_project:
+            messagebox.showwarning("Achtung", "Bitte zuerst ein Projekt auswählen!")
+            return
+        
+        query = self.search_query.get().strip()
+        if not query or query == "Suchbegriff...":
+            messagebox.showwarning("Achtung", "Bitte Suchbegriff eingeben!")
+            return
+        
+        try:
+            k = int(self.search_k.get())
+        except:
+            k = 5
+        
+        self.search_results.delete(1.0, tk.END)
+        self.search_results.insert(1.0, f"🔍 Suche nach '{query}' (k={k})...\n\n")
+        self.search_results.update()
+        
+        def search_thread():
+            try:
+                results = self.sim.search_projects(query, [self.current_project], k)
+                self.frame.after(0, lambda: self._display_search_results(results))
+            except Exception as e:
+                self.frame.after(0, lambda: self.search_results.insert(tk.END, f"❌ Fehler: {e}"))
+        
+        threading.Thread(target=search_thread, daemon=True).start()
+    
+    def _display_search_results(self, results):
+        self.search_results.delete(1.0, tk.END)
+        if not results:
+            self.search_results.insert(1.0, "Keine Ergebnisse gefunden.")
+            return
+        
+        text = f"📊 {len(results)} Ergebnisse:\n\n"
+        for i, r in enumerate(results, 1):
+            text += f"{i}. 📄 {r.get('document', '?')}\n"
+            text += f"   📁 {r.get('source', '?')}\n"
+            text += f"   ⭐ Ähnlichkeit: {r.get('similarity', 0):.2f}\n"
+            text += f"   📝 {r.get('text', '')[:300]}...\n\n"
+        
+        self.search_results.insert(1.0, text)
+    
+    def _update_project_stats(self):
+        if not self.current_project:
+            return
+        
+        project = self.sim.project_manager.get_project(self.current_project)
+        if project:
+            text = f"📊 PROJEKT-STATISTIK\n\n"
+            text += f"Name: {project.metadata.get('name', '?')}\n"
+            text += f"Erstellt: {project.metadata.get('created', '?')}\n"
+            text += f"Dokumente: {project.metadata.get('document_count', 0)}\n"
+            text += f"Chunks: {project.metadata.get('chunk_count', 0)}\n"
+            text += f"Chunk-Größe: {project.metadata.get('chunk_size', 1000)}\n"
+            text += f"Chunk-Overlap: {project.metadata.get('chunk_overlap', 200)}\n"
+            text += f"Embedding-Modell: {project.metadata.get('embedding_model', '?')}\n"
+            
+            if project.documents:
+                text += f"\n📄 DOKUMENTE:\n"
+                for doc in project.documents[:10]:
+                    text += f"  • {doc.get('title', doc.get('source', '?'))[:40]} ({doc.get('chunk_count', 0)} Chunks)\n"
+            
+            self.project_stats.delete(1.0, tk.END)
+            self.project_stats.insert(1.0, text)
+    
+    def _delete_project(self):
+        if not self.current_project:
+            return
+        
+        if messagebox.askyesno("Projekt löschen", f"Projekt '{self.current_project}' unwiderruflich löschen?"):
+            try:
+                self.sim.project_manager.delete_project(self.current_project)
+                self.current_project = None
+                self.project_header.config(text="Kein Projekt ausgewählt")
+                self.docs_listbox.delete(0, tk.END)
+                self.doc_preview.delete(1.0, tk.END)
+                self.search_results.delete(1.0, tk.END)
+                self.project_stats.delete(1.0, tk.END)
+                self._refresh_project_list()
+                messagebox.showinfo("Erfolg", "Projekt gelöscht!")
+            except Exception as e:
+                messagebox.showerror("Fehler", str(e))
+
+
+class CitationLeaderboardTab:
+    def __init__(self, parent, sim):
+        self.parent = parent
+        self.sim = sim
+        self.frame = tb.Frame(parent)
+        self._setup_ui()
+        self._refresh()
+    
+    def _setup_ui(self):
+        header = tb.Label(self.frame, text="📚 ZITIER-LEADERBOARD", font=("Segoe UI", 16, "bold"))
+        header.pack(pady=10)
+        
+        stats_frame = tb.Frame(self.frame)
+        stats_frame.pack(fill=X, padx=20, pady=10)
+        
+        self.total_citations_label = tb.Label(stats_frame, text="Dokumenten-Zitate: 0", font=("Segoe UI", 12))
+        self.total_citations_label.pack(side=LEFT, padx=10)
+        
+        self.total_external_label = tb.Label(stats_frame, text="Externe Zitate: 0", font=("Segoe UI", 12))
+        self.total_external_label.pack(side=LEFT, padx=10)
+        
+        self.avg_accuracy_label = tb.Label(stats_frame, text="Durchschn. Genauigkeit: 0%", font=("Segoe UI", 12))
+        self.avg_accuracy_label.pack(side=LEFT, padx=10)
+        
+        self.agents_with_citations_label = tb.Label(stats_frame, text="Agenten mit Zitaten: 0", font=("Segoe UI", 12))
+        self.agents_with_citations_label.pack(side=LEFT, padx=10)
+        
+        tb.Button(stats_frame, text="🔄 Aktualisieren", command=self._refresh, bootstyle="primary").pack(side=RIGHT)
+        
+        notebook = tb.Notebook(self.frame)
+        notebook.pack(fill=BOTH, expand=True, padx=20, pady=10)
+        
+        doc_frame = tb.Frame(notebook)
+        notebook.add(doc_frame, text="📄 Dokumenten-Zitate (gewertet)")
+        
+        doc_columns = ("Rang", "Agent", "Rolle", "Zitate", "Genauigkeit", "Projekte")
+        self.doc_leaderboard_tree = ttk.Treeview(doc_frame, columns=doc_columns, show="headings", height=15)
+        
+        self.doc_leaderboard_tree.heading("Rang", text="Rang")
+        self.doc_leaderboard_tree.heading("Agent", text="Agent")
+        self.doc_leaderboard_tree.heading("Rolle", text="Rolle")
+        self.doc_leaderboard_tree.heading("Zitate", text="Zitate")
+        self.doc_leaderboard_tree.heading("Genauigkeit", text="Genauigkeit")
+        self.doc_leaderboard_tree.heading("Projekte", text="Projekte")
+        
+        self.doc_leaderboard_tree.column("Rang", width=50)
+        self.doc_leaderboard_tree.column("Agent", width=200)
+        self.doc_leaderboard_tree.column("Rolle", width=150)
+        self.doc_leaderboard_tree.column("Zitate", width=80)
+        self.doc_leaderboard_tree.column("Genauigkeit", width=100)
+        self.doc_leaderboard_tree.column("Projekte", width=80)
+        
+        self.doc_leaderboard_tree.pack(fill=BOTH, expand=True, padx=10, pady=10)
+        
+        doc_scroll = tb.Scrollbar(doc_frame, orient=VERTICAL, command=self.doc_leaderboard_tree.yview)
+        doc_scroll.pack(side=RIGHT, fill=Y)
+        self.doc_leaderboard_tree.configure(yscrollcommand=doc_scroll.set)
+        
+        ext_frame = tb.Frame(notebook)
+        notebook.add(ext_frame, text="📖 Externe Zitate (ungwertet)")
+        
+        ext_columns = ("Rang", "Agent", "Rolle", "Zitate", "Quellen")
+        self.ext_leaderboard_tree = ttk.Treeview(ext_frame, columns=ext_columns, show="headings", height=15)
+        
+        self.ext_leaderboard_tree.heading("Rang", text="Rang")
+        self.ext_leaderboard_tree.heading("Agent", text="Agent")
+        self.ext_leaderboard_tree.heading("Rolle", text="Rolle")
+        self.ext_leaderboard_tree.heading("Zitate", text="Zitate")
+        self.ext_leaderboard_tree.heading("Quellen", text="Quellen")
+        
+        self.ext_leaderboard_tree.column("Rang", width=50)
+        self.ext_leaderboard_tree.column("Agent", width=200)
+        self.ext_leaderboard_tree.column("Rolle", width=150)
+        self.ext_leaderboard_tree.column("Zitate", width=80)
+        self.ext_leaderboard_tree.column("Quellen", width=150)
+        
+        self.ext_leaderboard_tree.pack(fill=BOTH, expand=True, padx=10, pady=10)
+        
+        ext_scroll = tb.Scrollbar(ext_frame, orient=VERTICAL, command=self.ext_leaderboard_tree.yview)
+        ext_scroll.pack(side=RIGHT, fill=Y)
+        self.ext_leaderboard_tree.configure(yscrollcommand=ext_scroll.set)
+        
+        history_frame = tb.Frame(notebook)
+        notebook.add(history_frame, text="📜 Zitat-Historie")
+        
+        history_columns = ("Zeit", "Agent", "Typ", "Quelle", "Text")
+        self.history_tree = ttk.Treeview(history_frame, columns=history_columns, show="headings", height=15)
+        
+        self.history_tree.heading("Zeit", text="Zeit")
+        self.history_tree.heading("Agent", text="Agent")
+        self.history_tree.heading("Typ", text="Typ")
+        self.history_tree.heading("Quelle", text="Quelle")
+        self.history_tree.heading("Text", text="Text")
+        
+        self.history_tree.column("Zeit", width=120)
+        self.history_tree.column("Agent", width=150)
+        self.history_tree.column("Typ", width=80)
+        self.history_tree.column("Quelle", width=200)
+        self.history_tree.column("Text", width=300)
+        
+        self.history_tree.pack(fill=BOTH, expand=True, padx=10, pady=10)
+        
+        history_scroll = tb.Scrollbar(history_frame, orient=VERTICAL, command=self.history_tree.yview)
+        history_scroll.pack(side=RIGHT, fill=Y)
+        self.history_tree.configure(yscrollcommand=history_scroll.set)
+    
+    def _refresh(self):
+        try:
+            stats = self.sim.get_citation_stats()
+            self.total_citations_label.config(text=f"Dokumenten-Zitate: {stats.get('document_citations', 0)}")
+            self.total_external_label.config(text=f"Externe Zitate: {stats.get('external_citations', 0)}")
+            self.avg_accuracy_label.config(text=f"Durchschn. Genauigkeit: {stats.get('avg_accuracy', 0)*100:.1f}%")
+            self.agents_with_citations_label.config(text=f"Agenten mit Zitaten: {stats.get('agents_with_citations', 0)}")
+            
+            doc_leaderboard = self.sim.get_citation_leaderboard(10)
+            for item in self.doc_leaderboard_tree.get_children():
+                self.doc_leaderboard_tree.delete(item)
+            
+            for i, entry in enumerate(doc_leaderboard, 1):
+                medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else str(i)
+                self.doc_leaderboard_tree.insert("", tk.END, values=(
+                    medal,
+                    entry.get('name', '?')[:25],
+                    entry.get('role', '?')[:20],
+                    entry.get('citation_count', 0),
+                    f"{entry.get('avg_accuracy', 0)*100:.1f}%",
+                    entry.get('projects_used', 0)
+                ))
+            
+            ext_leaderboard = self.sim.get_external_citation_leaderboard(10)
+            for item in self.ext_leaderboard_tree.get_children():
+                self.ext_leaderboard_tree.delete(item)
+            
+            for i, entry in enumerate(ext_leaderboard, 1):
+                medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else str(i)
+                self.ext_leaderboard_tree.insert("", tk.END, values=(
+                    medal,
+                    entry.get('name', '?')[:25],
+                    entry.get('role', '?')[:20],
+                    entry.get('citation_count', 0),
+                    entry.get('sources_used', 0)
+                ))
+            
+        except Exception as e:
+            print(f"❌ Fehler beim Laden des Zitier-Leaderboards: {e}")
+    
+    def add_citation_to_history(self, agent_name: str, citation_type: str, source: str, text: str):
+        now = datetime.now().strftime("%H:%M:%S")
+        self.history_tree.insert("", 0, values=(now, agent_name, citation_type, source, text[:100]))
+
 
 class AnalysisResultWindow:
     def __init__(self, parent, sim, job):
@@ -561,8 +1047,6 @@ class AnalysisResultWindow:
         self.window.clipboard_append(text)
         messagebox.showinfo("Kopiert", "In Zwischenablage kopiert!")
 
-
-# ==================== ANALYSIS TAB ====================
 
 class AnalysisTab:
     def __init__(self, parent, sim):
@@ -739,8 +1223,6 @@ class AnalysisTab:
         AnalysisResultWindow(self.frame, self.sim, job)
 
 
-# ==================== DB-MANAGEMENT WINDOW ====================
-
 class DBManagementWindow:
     def __init__(self, parent, sim):
         self.parent = parent
@@ -805,6 +1287,11 @@ class DBManagementWindow:
             text += f"  • Prognosen: {stats['prognoses']}\n"
             text += f"  • Diskussionen: {stats['discussions']}\n"
             text += f"  • Beiträge: {stats['contributions']}\n"
+            text += f"  • Projekte: {stats.get('projects', 0)}\n"
+            text += f"  • Projektdokumente: {stats.get('project_documents', 0)}\n"
+            text += f"  • Chunks: {stats.get('project_chunks', 0)}\n"
+            text += f"  • Dokumenten-Zitate: {stats.get('citations', 0)}\n"
+            text += f"  • Externe Zitate: {stats.get('external_citations', 0)}\n"
             text += f"  • Durchschn. Fachwissen: {stats.get('avg_fachwissen', 0):.2f}\n"
             text += f"  • Durchschn. Kommunikation: {stats.get('avg_kommunikation', 0):.2f}\n"
             text += f"  • Durchschn. Analyse: {stats.get('avg_analyse', 0):.2f}\n"
@@ -830,8 +1317,12 @@ class DBManagementWindow:
         if filepath and messagebox.askyesno("Wiederherstellen", "Fortfahren?"):
             try:
                 shutil.copy2(filepath, self.sim.db.db_path)
+                from includes.database import SynthAgoraDB
+                from includes.knowledge_graph import KnowledgeGraph
+                from includes.project_manager import ProjectManager
                 self.sim.db = SynthAgoraDB()
                 self.sim.knowledge_graph = KnowledgeGraph()
+                self.sim.project_manager = ProjectManager()
                 messagebox.showinfo("Erfolg", "Datenbank wiederhergestellt!")
                 self._refresh_info()
             except Exception as e:
@@ -848,7 +1339,9 @@ class DBManagementWindow:
                 cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
                 for table in cursor.fetchall():
                     cursor.execute(f"SELECT * FROM {table[0]}")
-                    data["tables"][table[0]] = [dict(row) for row in cursor.fetchall()]
+                    rows = cursor.fetchall()
+                    if rows:
+                        data["tables"][table[0]] = [dict(row) for row in rows]
             finally:
                 conn.close()
             with open(path, 'w', encoding='utf-8') as f:
@@ -899,20 +1392,22 @@ class DBManagementWindow:
         if messagebox.askyesno("WIRKLICH?", "ALLE DATEN werden gelöscht!", icon='warning'):
             try:
                 self.sim.backup_db()
+                from includes.database import SynthAgoraDB
+                from includes.knowledge_graph import KnowledgeGraph
+                from includes.project_manager import ProjectManager
                 self.sim.db = SynthAgoraDB()
                 self.sim.knowledge_graph = KnowledgeGraph()
+                self.sim.project_manager = ProjectManager()
                 self._refresh_info()
                 messagebox.showinfo("Erfolg", "Datenbank zurückgesetzt!")
             except Exception as e:
                 messagebox.showerror("Fehler", str(e))
 
 
-# ==================== HAUPT-GUI ====================
-
 class SynthAgoraGUI:
     def __init__(self):
         self.root = tb.Window(themename="cosmo")
-        self.root.title("SynthAgora - Mit SQLite & Agenten-Pool")
+        self.root.title("SynthAgora - Mit SQLite & Agenten-Pool & Projekten & Zitier-Pflicht & Synthese")
         self.root.geometry("1400x900")
         
         self.fm = FileManager()
@@ -962,7 +1457,6 @@ class SynthAgoraGUI:
         self.notebook = tb.Notebook(self.root)
         self.notebook.pack(fill=BOTH, expand=True, padx=10, pady=5)
         
-        # Zentraler Debatten-Tab (mit Sub-Tabs)
         self.tab_main = tb.Frame(self.notebook)
         self.notebook.add(self.tab_main, text="🎭 Debatte")
         self._setup_debate_tab()
@@ -972,6 +1466,9 @@ class SynthAgoraGUI:
         
         self.tab_pool = tb.Frame(self.notebook)
         self.notebook.add(self.tab_pool, text="📚 Agenten-Pool")
+        
+        self.tab_projects = ProjectsTab(self.notebook, self.sim)
+        self.notebook.add(self.tab_projects.frame, text="📁 Projekte")
         
         self.tab_analysis = AnalysisTab(self.notebook, self.sim)
         self.notebook.add(self.tab_analysis.frame, text="🔍 Analyse")
@@ -984,6 +1481,15 @@ class SynthAgoraGUI:
         
         self.tab_memory = MemoryPalaceTab(self.notebook, self.sim)
         self.notebook.add(self.tab_memory.frame, text="🧠 Gedächtnis-Palast")
+        
+        self.tab_citations = CitationLeaderboardTab(self.notebook, self.sim)
+        self.notebook.add(self.tab_citations.frame, text="📚 Zitier-Ranking")
+        
+        self.tab_synthesis = SynthesisTab(self.notebook, self.sim)
+        self.notebook.add(self.tab_synthesis.frame, text="🎨 Synthese")
+
+        self.tab_legal = LegalAnalysisTab(self.notebook, self.sim)
+        self.notebook.add(self.tab_legal.frame, text="⚖️ Legal Analysis")
         
         self.tab_dashboard = tb.Frame(self.notebook)
         self.notebook.add(self.tab_dashboard, text="📊 Dashboard")
@@ -1032,28 +1538,21 @@ class SynthAgoraGUI:
         self._update_statusbar()
     
     def _setup_debate_tab(self):
-        """Zentraler Debatten-Tab mit Sub-Tabs für alle Einstellungen"""
-        
-        # Hauptframe
         main_frame = tb.Frame(self.tab_main)
         main_frame.pack(fill=BOTH, expand=True, padx=10, pady=10)
         
-        # ========== SUB-TABS ==========
         sub_notebook = tb.Notebook(main_frame)
         sub_notebook.pack(fill=BOTH, expand=True, pady=5)
         
-        # --- TAB 1: BASIS ---
         basis_frame = tb.Frame(sub_notebook)
         sub_notebook.add(basis_frame, text="📋 BASIS")
         
-        # Thema
         topic_frame = tb.LabelFrame(basis_frame, text="🎯 Thema")
         topic_frame.pack(fill=X, padx=10, pady=5)
         self.topic_entry = tb.Entry(topic_frame, font=("Segoe UI", 12))
         self.topic_entry.pack(fill=X, padx=10, pady=10)
         self.topic_entry.insert(0, "Thema der Diskussion...")
         
-        # Dokument
         doc_frame = tb.LabelFrame(basis_frame, text="📄 Dokument (optional)")
         doc_frame.pack(fill=BOTH, expand=True, padx=10, pady=5)
         
@@ -1066,34 +1565,29 @@ class SynthAgoraGUI:
         self.doc_text = scrolledtext.ScrolledText(doc_frame, height=6, font=("Segoe UI", 10))
         self.doc_text.pack(fill=BOTH, expand=True, padx=10, pady=5)
         
-        # Parameter
         param_frame = tb.LabelFrame(basis_frame, text="⚙️ Parameter")
         param_frame.pack(fill=X, padx=10, pady=5)
         param_content = tb.Frame(param_frame)
         param_content.pack(fill=X, padx=10, pady=10)
         
-        # Runden
         rounds_frame = tb.Frame(param_content)
         rounds_frame.pack(side=LEFT, padx=10)
         tb.Label(rounds_frame, text="Runden:").pack(side=LEFT)
         self.rounds_var = tk.StringVar(value="3")
         tb.Spinbox(rounds_frame, from_=1, to=10, textvariable=self.rounds_var, width=5).pack(side=LEFT, padx=5)
         
-        # Zeit pro Runde
         time_frame = tb.Frame(param_content)
         time_frame.pack(side=LEFT, padx=10)
         tb.Label(time_frame, text="Zeit/Runde (s):").pack(side=LEFT)
         self.time_per_round = tk.StringVar(value="0")
         tb.Spinbox(time_frame, from_=0, to=300, textvariable=self.time_per_round, width=5).pack(side=LEFT, padx=5)
         
-        # Denkzeit
         think_frame = tb.Frame(param_content)
         think_frame.pack(side=LEFT, padx=10)
         tb.Label(think_frame, text="Denkzeit (s):").pack(side=LEFT)
         self.thinking_time = tk.StringVar(value="10")
         tb.Spinbox(think_frame, from_=0, to=60, textvariable=self.thinking_time, width=5).pack(side=LEFT, padx=5)
         
-        # --- TAB 2: MODERATOR ---
         moderator_frame = tb.Frame(sub_notebook)
         sub_notebook.add(moderator_frame, text="🎭 MODERATOR")
         
@@ -1114,12 +1608,10 @@ class SynthAgoraGUI:
                                       command=self.load_selected_moderator, bootstyle="primary")
         self.load_mod_btn.pack(pady=5)
         
-        # Moderator-Info
         self.mod_info_label = tb.Label(moderator_frame, text="Kein Moderator geladen", 
                                         bootstyle="secondary", wraplength=500)
         self.mod_info_label.pack(padx=10, pady=10)
         
-        # --- TAB 3: FORMAT ---
         format_frame = tb.Frame(sub_notebook)
         sub_notebook.add(format_frame, text="🎭 FORMAT")
         
@@ -1136,12 +1628,32 @@ class SynthAgoraGUI:
                                variable=self.debate_format_var, value=f['id'], bootstyle="info")
             rb.grid(row=i//2, column=i%2, sticky=W, padx=10, pady=2)
         
-        # --- TAB 4: TEAMS ---
+        projects_frame = tb.Frame(sub_notebook)
+        sub_notebook.add(projects_frame, text="📁 PROJEKTE")
+        
+        tb.Label(projects_frame, text="Projekte für Dokumenten-Retrieval", font=("Segoe UI", 12, "bold")).pack(anchor=W, padx=10, pady=5)
+        tb.Label(projects_frame, text="Wähle Projekte aus, die Agenten während der Debatte nutzen können", bootstyle="secondary").pack(anchor=W, padx=10)
+        
+        self.projects_listbox = tk.Listbox(projects_frame, selectmode=tk.EXTENDED, font=("Consolas", 9), height=8)
+        self.projects_listbox.pack(fill=BOTH, expand=True, padx=10, pady=10)
+        
+        proj_btn_frame = tb.Frame(projects_frame)
+        proj_btn_frame.pack(fill=X, padx=10, pady=5)
+        tb.Button(proj_btn_frame, text="✅ Alle auswählen", command=self.select_all_projects, bootstyle="info-outline", width=15).pack(side=LEFT, padx=2)
+        tb.Button(proj_btn_frame, text="❌ Alle abwählen", command=self.deselect_all_projects, bootstyle="secondary-outline", width=15).pack(side=LEFT, padx=2)
+        
+        k_frame = tb.Frame(projects_frame)
+        k_frame.pack(fill=X, padx=10, pady=10)
+        tb.Label(k_frame, text="Anzahl relevanter Chunks pro Agent (k):").pack(side=LEFT)
+        self.projects_k = tk.StringVar(value="5")
+        tb.Spinbox(k_frame, from_=1, to=20, textvariable=self.projects_k, width=5).pack(side=LEFT, padx=5)
+        
+        self._refresh_projects_list()
+        
         teams_frame = tb.Frame(sub_notebook)
         sub_notebook.add(teams_frame, text="⚖️ TEAMS")
         self._setup_teams_tab(teams_frame)
         
-        # --- TAB 5: PRÄMISSE ---
         premise_frame = tb.Frame(sub_notebook)
         sub_notebook.add(premise_frame, text="⚖️ PRÄMISSE")
         
@@ -1158,11 +1670,9 @@ class SynthAgoraGUI:
         tb.Radiobutton(mode_frame, text="✅ These beweisen", variable=self.prove_mode, value=True, bootstyle="success").pack(side=LEFT, padx=10)
         tb.Radiobutton(mode_frame, text="❌ These widerlegen", variable=self.prove_mode, value=False, bootstyle="danger").pack(side=LEFT, padx=10)
         
-        # --- TAB 6: ERWEITERT ---
         advanced_frame = tb.Frame(sub_notebook)
         sub_notebook.add(advanced_frame, text="⚙️ ERWEITERT")
         
-        # Fishbowl
         fb_frame = tb.LabelFrame(advanced_frame, text="🐟 Fishbowl")
         fb_frame.pack(fill=X, padx=10, pady=5)
         fb_content = tb.Frame(fb_frame)
@@ -1171,7 +1681,6 @@ class SynthAgoraGUI:
         self.inner_circle_size = tk.StringVar(value="5")
         tb.Spinbox(fb_content, from_=2, to=20, textvariable=self.inner_circle_size, width=5).pack(side=LEFT, padx=5)
         
-        # World Café
         wc_frame = tb.LabelFrame(advanced_frame, text="☕ World Café")
         wc_frame.pack(fill=X, padx=10, pady=5)
         wc_content = tb.Frame(wc_frame)
@@ -1183,7 +1692,6 @@ class SynthAgoraGUI:
         self.rotation_rounds = tk.StringVar(value="3")
         tb.Spinbox(wc_content, from_=1, to=5, textvariable=self.rotation_rounds, width=5).pack(side=LEFT, padx=5)
         
-        # Delphi
         delphi_frame = tb.LabelFrame(advanced_frame, text="🔮 Delphi")
         delphi_frame.pack(fill=X, padx=10, pady=5)
         delphi_content = tb.Frame(delphi_frame)
@@ -1193,7 +1701,6 @@ class SynthAgoraGUI:
         self.show_stats = tk.BooleanVar(value=True)
         tb.Checkbutton(delphi_content, text="Statistiken anzeigen", variable=self.show_stats, bootstyle="info").pack(anchor=W)
         
-        # Sanktionen
         sanction_frame = tb.LabelFrame(advanced_frame, text="⚖️ Sanktionen")
         sanction_frame.pack(fill=X, padx=10, pady=5)
         sanction_content = tb.Frame(sanction_frame)
@@ -1211,7 +1718,6 @@ class SynthAgoraGUI:
         self.mute_rounds = tk.StringVar(value="2")
         tb.Spinbox(sanction_row, from_=1, to=5, textvariable=self.mute_rounds, width=3).pack(side=LEFT, padx=5)
         
-        # Rednerliste
         speaker_frame = tb.LabelFrame(advanced_frame, text="🎤 Steuerung")
         speaker_frame.pack(fill=X, padx=10, pady=5)
         speaker_content = tb.Frame(speaker_frame)
@@ -1224,7 +1730,6 @@ class SynthAgoraGUI:
         self.voting_var = tk.BooleanVar(value=False)
         tb.Checkbutton(speaker_content, text="Abstimmungen aktivieren", variable=self.voting_var, bootstyle="info").pack(anchor=W)
         
-        # Wiederholungsschutz
         rep_frame = tb.LabelFrame(advanced_frame, text="🔄 Wiederholungsschutz")
         rep_frame.pack(fill=X, padx=10, pady=5)
         rep_content = tb.Frame(rep_frame)
@@ -1233,7 +1738,6 @@ class SynthAgoraGUI:
         self.repetition_threshold = tk.StringVar(value="2")
         tb.Spinbox(rep_content, from_=1, to=5, textvariable=self.repetition_threshold, width=3).pack(side=LEFT, padx=5)
         
-        # ========== AGENTEN-LISTE (geladene Agenten) ==========
         agent_list_frame = tb.LabelFrame(main_frame, text="📋 Geladene Agenten")
         agent_list_frame.pack(fill=BOTH, expand=True, pady=5)
         
@@ -1243,7 +1747,6 @@ class SynthAgoraGUI:
         agent_scroll.pack(side=RIGHT, fill=Y)
         self.debate_agent_listbox.config(yscrollcommand=agent_scroll.set)
         
-        # ========== BUTTONS ==========
         btn_frame = tb.Frame(main_frame)
         btn_frame.pack(fill=X, pady=10)
         
@@ -1251,18 +1754,27 @@ class SynthAgoraGUI:
                                          command=self.save_debate_settings, bootstyle="success", width=25)
         self.save_debate_btn.pack(side=LEFT, padx=5)
         
-        # Agenten-Status anzeigen
         self.debate_agent_status = tb.Label(btn_frame, text="👥 0 Agenten geladen", bootstyle="secondary")
         self.debate_agent_status.pack(side=LEFT, padx=10)
         
-        # Debatte starten Button
         tb.Button(btn_frame, text="🎬 DEBATTE STARTEN", 
                   command=self.start_debate, bootstyle="primary", width=25).pack(side=RIGHT, padx=5)
     
+    def _refresh_projects_list(self):
+        self.projects_listbox.delete(0, tk.END)
+        projects = self.sim.list_projects()
+        for proj in projects:
+            name = proj.get('name', '?')
+            docs = proj.get('document_count', 0)
+            self.projects_listbox.insert(tk.END, f"📁 {name} | {docs} Dokumente")
+    
+    def select_all_projects(self):
+        self.projects_listbox.selection_set(0, tk.END)
+    
+    def deselect_all_projects(self):
+        self.projects_listbox.selection_clear(0, tk.END)
+    
     def _setup_teams_tab(self, parent):
-        """Richtet die Team-Zuordnung im Teams-Tab ein"""
-        
-        # Filter und Suche
         filter_frame = tb.Frame(parent)
         filter_frame.pack(fill=X, padx=10, pady=5)
         
@@ -1280,11 +1792,9 @@ class SynthAgoraGUI:
         team_filter_combo.pack(side=LEFT, padx=5)
         team_filter_combo.bind('<<ComboboxSelected>>', lambda e: self.filter_team_agents())
         
-        # Drei-Spalten-Layout
         list_container = tb.Frame(parent)
         list_container.pack(fill=BOTH, expand=True, padx=10, pady=5)
         
-        # Pro-Team (links)
         pro_frame = tb.LabelFrame(list_container, text="✅ Pro-Team")
         pro_frame.pack(side=LEFT, fill=BOTH, expand=True, padx=5)
         
@@ -1294,7 +1804,6 @@ class SynthAgoraGUI:
         pro_scroll.pack(side=RIGHT, fill=Y)
         self.pro_listbox.config(yscrollcommand=pro_scroll.set)
         
-        # Buttons (mitte)
         button_frame = tb.Frame(list_container)
         button_frame.pack(side=LEFT, padx=5)
         
@@ -1305,7 +1814,6 @@ class SynthAgoraGUI:
         tb.Button(button_frame, text="⚖️", command=self.random_teams, bootstyle="info", width=3).pack(pady=2)
         tb.Button(button_frame, text="🗑️", command=self.clear_teams, bootstyle="warning", width=3).pack(pady=2)
         
-        # Contra-Team (rechts)
         contra_frame = tb.LabelFrame(list_container, text="❌ Contra-Team")
         contra_frame.pack(side=RIGHT, fill=BOTH, expand=True, padx=5)
         
@@ -1315,7 +1823,6 @@ class SynthAgoraGUI:
         contra_scroll.pack(side=RIGHT, fill=Y)
         self.contra_listbox.config(yscrollcommand=contra_scroll.set)
         
-        # Verfügbare Agenten (unten)
         available_frame = tb.LabelFrame(parent, text="📋 Verfügbare Agenten (Doppelklick zum Hinzufügen)")
         available_frame.pack(fill=BOTH, expand=True, padx=10, pady=5)
         
@@ -1326,25 +1833,20 @@ class SynthAgoraGUI:
         self.available_listbox_teams.config(yscrollcommand=available_scroll.set)
         self.available_listbox_teams.bind('<Double-Button-1>', self.add_agent_to_team_from_teams)
         
-        # Team-Info
         info_frame = tb.Frame(parent)
         info_frame.pack(fill=X, pady=5)
         self.team_info_label = tb.Label(info_frame, text="Pro: 0 | Contra: 0", font=("Segoe UI", 10, "bold"))
         self.team_info_label.pack()
         
-        # Agentenliste aktualisieren
         self.refresh_team_agent_list()
     
     def refresh_team_agent_list(self):
-        """Aktualisiert die Liste der verfügbaren Agenten im Teams-Tab"""
         if not hasattr(self, 'available_listbox_teams') or not self.available_listbox_teams:
             return
         
         self.available_listbox_teams.delete(0, tk.END)
         
-        # Hole alle Agenten aus der aktuellen Simulation
         for agent in self.sim.agents:
-            # Prüfe ob Agent bereits in Pro oder Contra ist
             in_pro = any(agent.name == self.pro_listbox.get(i).split(" | ")[0] for i in range(self.pro_listbox.size()))
             in_contra = any(agent.name == self.contra_listbox.get(i).split(" | ")[0] for i in range(self.contra_listbox.size()))
             if not in_pro and not in_contra:
@@ -1355,7 +1857,6 @@ class SynthAgoraGUI:
         self.update_debate_agent_list()
     
     def update_debate_agent_list(self):
-        """Aktualisiert die Liste der geladenen Agenten im Debatten-Tab"""
         if hasattr(self, 'debate_agent_listbox') and self.debate_agent_listbox:
             self.debate_agent_listbox.delete(0, tk.END)
             for agent in self.sim.agents:
@@ -1364,7 +1865,6 @@ class SynthAgoraGUI:
             self.debate_agent_status.config(text=f"👥 {len(self.sim.agents)} Agenten geladen")
     
     def filter_team_agents(self, event=None):
-        """Filtert die verfügbare Agentenliste nach Suchbegriff"""
         if not hasattr(self, 'available_listbox_teams') or not self.available_listbox_teams:
             return
         
@@ -1376,7 +1876,6 @@ class SynthAgoraGUI:
             in_pro = any(agent.name == self.pro_listbox.get(i).split(" | ")[0] for i in range(self.pro_listbox.size()))
             in_contra = any(agent.name == self.contra_listbox.get(i).split(" | ")[0] for i in range(self.contra_listbox.size()))
             
-            # Team-Filter
             if team_filter == "Pro" and not in_pro:
                 continue
             if team_filter == "Contra" and not in_contra:
@@ -1392,7 +1891,6 @@ class SynthAgoraGUI:
                 self.available_listbox_teams.insert(tk.END, f"{rank_icon} {agent.name} | {agent.role[:30]}")
     
     def add_agent_to_team_from_teams(self, event):
-        """Fügt ausgewählten Agenten zu Pro oder Contra hinzu (Dialog)"""
         if not self.available_listbox_teams:
             return
         selection = self.available_listbox_teams.curselection()
@@ -1496,10 +1994,8 @@ class SynthAgoraGUI:
             messagebox.showerror("Fehler", "Moderator konnte nicht geladen werden")
     
     def save_debate_settings(self):
-        """Speichert Debatten-Einstellungen aus dem zentralen Tab"""
         premise = self.premise_text.get(1.0, tk.END).strip()
         
-        # Pro/Contra Agenten aus den Listboxen holen
         pro_agents = []
         for i in range(self.pro_listbox.size()):
             line = self.pro_listbox.get(i)
@@ -1516,17 +2012,21 @@ class SynthAgoraGUI:
                 name = name[1:].strip()
             contra_agents.append(name)
         
-        # Runden aus dem Haupt-Tab
         try:
             rounds = int(self.rounds_var.get())
         except:
             rounds = 3
         
-        print(f"💾 Speichere Debatten-Einstellungen:")
-        print(f"   Format: {self.debate_format_var.get()}")
-        print(f"   Runden: {rounds}")
-        print(f"   Pro-Agenten: {pro_agents}")
-        print(f"   Contra-Agenten: {contra_agents}")
+        selected_projects = []
+        for idx in self.projects_listbox.curselection():
+            line = self.projects_listbox.get(idx)
+            name = line.split(" | ")[0].replace("📁 ", "")
+            selected_projects.append(name)
+        
+        try:
+            retrieval_k = int(self.projects_k.get())
+        except:
+            retrieval_k = 5
         
         self.debate_settings = {
             "format": self.debate_format_var.get(),
@@ -1550,13 +2050,14 @@ class SynthAgoraGUI:
             "premise": premise,
             "prove_mode": self.prove_mode.get(),
             "use_moderator": self.use_moderator_var.get(),
+            "projects": selected_projects,
+            "retrieval_k": retrieval_k
         }
         
         self._update_status("✅ Debatten-Einstellungen gespeichert")
         messagebox.showinfo("Erfolg", "Debatten-Einstellungen gespeichert!")
     
     def start_debate(self):
-        """Startet eine Debatte mit den aktuellen Einstellungen"""
         if self.sim.is_running:
             messagebox.showwarning("Achtung", "Simulation läuft bereits!")
             return
@@ -1575,25 +2076,14 @@ class SynthAgoraGUI:
         
         document = self.doc_text.get(1.0, tk.END).strip()
         
-        # Runden aus dem Haupt-Tab übernehmen
         try:
             rounds = int(self.rounds_var.get())
         except:
             rounds = 3
         self.debate_settings["rounds"] = rounds
         
-        # Moderator-Status übernehmen (nur wenn Moderator existiert)
         if self.sim.moderator:
             self.sim.moderator.enabled = self.debate_settings.get("use_moderator", True)
-        
-        # Debug-Ausgabe
-        print(f"🎬 Starte Debatte mit Settings:")
-        print(f"   Format: {self.debate_settings.get('format')}")
-        print(f"   Thema: {topic}")
-        print(f"   Runden: {self.debate_settings.get('rounds')}")
-        print(f"   Pro-Agenten: {self.debate_settings.get('pro_agents')}")
-        print(f"   Contra-Agenten: {self.debate_settings.get('contra_agents')}")
-        print(f"   Moderator aktiv: {self.debate_settings.get('use_moderator', True) if self.sim.moderator else 'Kein Moderator geladen'}")
         
         self.start_btn.config(state=DISABLED)
         self.stop_btn.config(state=NORMAL)
@@ -1602,6 +2092,11 @@ class SynthAgoraGUI:
         self._add_to_chat(f"🎭 DEBATTE: {self.debate_settings['format']}")
         self._add_to_chat(f"🎯 THEMA: {topic}")
         self._add_to_chat(f"👥 {len(self.sim.agents)} Agenten")
+        
+        projects = self.debate_settings.get('projects', [])
+        if projects:
+            self._add_to_chat(f"📁 PROJEKTE: {', '.join(projects)}")
+        
         if self.debate_settings.get("use_moderator", False) and self.sim.moderator:
             self._add_to_chat(f"🎭 Moderator: {self.sim.moderator.name}")
         if self.debate_settings.get("pro_agents") or self.debate_settings.get("contra_agents"):
@@ -1788,11 +2283,9 @@ class SynthAgoraGUI:
         tb.Checkbutton(tag_search, text="Alle Tags müssen passen", variable=self.pool_match_all, bootstyle="info").pack(anchor=W, padx=10)
         tb.Button(tag_search, text="🏷️ Tags suchen", command=self.search_by_tags, bootstyle="primary").pack(pady=5)
         
-        # ========== QUICK ACTIONS MIT ANZAHL-SPINNER ==========
         quick_frame = tb.Frame(left_frame)
         quick_frame.pack(fill=X, pady=5)
         
-        # Anzahl-Spinner
         count_frame = tb.Frame(quick_frame)
         count_frame.pack(side=LEFT, padx=2)
         tb.Label(count_frame, text="Anzahl:").pack(side=LEFT)
@@ -1844,6 +2337,10 @@ class SynthAgoraGUI:
         detail_notebook.add(self.pool_detail_influences, text="🔄 Einflüsse")
         self.pool_detail_scores = scrolledtext.ScrolledText(detail_notebook, font=("Consolas", 10))
         detail_notebook.add(self.pool_detail_scores, text="⭐ Punkte & Prognosen")
+        self.pool_detail_citations = scrolledtext.ScrolledText(detail_notebook, font=("Consolas", 10))
+        detail_notebook.add(self.pool_detail_citations, text="📚 Dokumenten-Zitate")
+        self.pool_detail_external = scrolledtext.ScrolledText(detail_notebook, font=("Consolas", 10))
+        detail_notebook.add(self.pool_detail_external, text="📖 Externe Zitate")
         
         btn_frame = tb.Frame(right_frame)
         btn_frame.pack(fill=X, pady=5)
@@ -1855,7 +2352,6 @@ class SynthAgoraGUI:
         self.refresh_pool_statistics()
     
     def random_from_pool_and_load(self):
-        """Lädt zufällige Agenten aus dem Pool mit einstellbarer Anzahl"""
         try:
             count = int(self.random_load_count.get())
             count = max(1, min(500, count))
@@ -1884,14 +2380,11 @@ class SynthAgoraGUI:
     
     def _agents_loaded(self, count):
         self._update_status(f"✅ {count} Agenten geladen")
-        self._create_agent_cards()
         self._add_to_chat(f"\n=== GELADEN AUS POOL: {count} Agenten ===")
         self.refresh_dashboard()
         self.tab_memory.refresh_agent_list()
         self.update_debate_agent_list()
-    
-    def _create_agent_cards(self):
-        pass
+        self.tab_citations._refresh()
     
     def _setup_chat_tab(self):
         toolbar = tb.Frame(self.tab_chat)
@@ -1922,7 +2415,8 @@ class SynthAgoraGUI:
         stats_frame.pack(fill=X, pady=5)
         self.stats_labels = {}
         stats_items = [("Agenten", "agents"), ("Aktiv", "active"), ("Teams", "teams"), 
-                       ("Fakten", "facts"), ("Beiträge", "contributions"), ("Punkte", "points")]
+                       ("Fakten", "facts"), ("Beiträge", "contributions"), ("Punkte", "points"),
+                       ("Dok.-Zitate", "citations"), ("Ext.-Zitate", "external_citations")]
         for i, (label, key) in enumerate(stats_items):
             card = tb.Frame(stats_frame, bootstyle="primary", padding=10)
             card.grid(row=0, column=i, padx=2, pady=2, sticky="nsew")
@@ -1991,6 +2485,18 @@ class SynthAgoraGUI:
         for text, value in providers:
             tb.Radiobutton(provider_content, text=text, variable=self.provider_var, value=value, bootstyle="info").pack(anchor=W, padx=10)
         
+        embedding_frame = tb.LabelFrame(self.tab_config, text="🤖 Embedding Provider")
+        embedding_frame.pack(fill=X, padx=10, pady=5)
+        embedding_content = tb.Frame(embedding_frame)
+        embedding_content.pack(fill=X, padx=10, pady=10)
+        self.embedding_provider_var = tk.StringVar(value=Config.EMBEDDING_PROVIDER)
+        emb_providers = [("Sentence Transformer (lokal)", "sentence_transformer"), ("LM Studio", "lmstudio"), ("Ollama", "ollama"), ("OpenAI", "openai")]
+        for text, value in emb_providers:
+            tb.Radiobutton(embedding_content, text=text, variable=self.embedding_provider_var, value=value, bootstyle="info").pack(anchor=W, padx=10)
+        tb.Label(embedding_content, text="Modell:").pack(anchor=W, pady=(10,0))
+        self.embedding_model_var = tk.StringVar(value=Config.EMBEDDING_MODEL)
+        tb.Entry(embedding_content, textvariable=self.embedding_model_var, width=40).pack(anchor=W, pady=2)
+        
         lm_frame = tb.LabelFrame(self.tab_config, text="⚙️ LM Studio")
         lm_frame.pack(fill=X, padx=10, pady=5)
         lm_content = tb.Frame(lm_frame)
@@ -2046,10 +2552,12 @@ class SynthAgoraGUI:
             plugin_frame.pack(fill=X, pady=2)
             var = tk.BooleanVar(value=plugin.enabled)
             self.plugin_vars[key] = var
-            tb.Checkbutton(plugin_frame, text=plugin.name, variable=var, command=lambda k=key: self.toggle_plugin(k), bootstyle="info").pack(side=LEFT)
+            plugin_name = plugin.metadata.name if hasattr(plugin, 'metadata') else plugin.name
+            plugin_desc = plugin.metadata.description if hasattr(plugin, 'metadata') else plugin.description
+            tb.Checkbutton(plugin_frame, text=plugin_name, variable=var, command=lambda k=key: self.toggle_plugin(k), bootstyle="info").pack(side=LEFT)
             status = "✅ Aktiv" if plugin.enabled else "⏸️ Inaktiv"
             tb.Label(plugin_frame, text=status, bootstyle="success" if plugin.enabled else "secondary").pack(side=LEFT, padx=10)
-            tb.Label(plugin_frame, text=plugin.description, bootstyle="secondary").pack(side=LEFT, padx=10)
+            tb.Label(plugin_frame, text=plugin_desc[:50], bootstyle="secondary").pack(side=LEFT, padx=10)
         
         test_frame = tb.LabelFrame(main_frame, text="🔍 Test-Suche")
         test_frame.pack(fill=X, pady=10)
@@ -2157,8 +2665,6 @@ class SynthAgoraGUI:
         self.results_text.pack(fill=BOTH, expand=True, pady=5)
         self.results_text.insert(1.0, "Hier erscheinen die Analyse-Ergebnisse...")
     
-    # ==================== HILFSFUNKTIONEN ====================
-    
     def _refresh_lists(self):
         mod_files = self.fm.get_moderator_files()
         mod_names = [os.path.basename(f) for f in mod_files]
@@ -2172,6 +2678,7 @@ class SynthAgoraGUI:
             self.example_combo['values'] = example_names
             if example_names:
                 self.example_combo.current(0)
+        self._refresh_projects_list()
     
     def _check_lm(self):
         ok, msg = self.sim.lm.test()
@@ -2210,7 +2717,8 @@ class SynthAgoraGUI:
                 if msg[0] == "moderator":
                     self._add_to_chat(f"🎭 {msg[1]}")
                 elif msg[0] == "agent":
-                    self._add_to_chat(f"🗣️ {msg[1]}: {msg[2]}")
+                    team_tag = f"[{msg[4].upper()}] " if len(msg) > 4 and msg[4] else ""
+                    self._add_to_chat(f"🗣️ {team_tag}{msg[1]}: {msg[2]}")
                 elif msg[0] == "system":
                     self._add_to_chat(f"📢 {msg[1]}")
                 elif msg[0] == "round_update":
@@ -2230,6 +2738,7 @@ class SynthAgoraGUI:
                     self._add_to_chat("\n✅ Diskussion beendet\n")
                     self.refresh_dashboard()
                     self.tab_memory.refresh_agent_list()
+                    self.tab_citations._refresh()
         except queue.Empty:
             pass
         self.root.after(50, self._process_queue)
@@ -2252,8 +2761,6 @@ class SynthAgoraGUI:
     
     def open_migration(self):
         MigrationWindow(self.root)
-    
-    # ==================== GENERIERUNG ====================
     
     def _update_generation_progress(self, message, current=None, total=None):
         if current is not None and total is not None:
@@ -2365,8 +2872,6 @@ class SynthAgoraGUI:
         self._refresh_lists()
         self.refresh_pool_statistics()
         messagebox.showinfo("Erfolg", f"{len(result['agents'])} Agenten generiert!")
-    
-    # ==================== POOL-METHODEN ====================
     
     def refresh_pool_statistics(self):
         try:
@@ -2614,6 +3119,33 @@ class SynthAgoraGUI:
         for prog in prognoses[:10]:
             score_text += f"  • {prog.get('topic', '?')}: {prog.get('prediction', '')[:80]}...\n"
         self.pool_detail_scores.insert(tk.END, score_text)
+        
+        self.pool_detail_citations.delete(1.0, tk.END)
+        citations = self.sim.db.get_agent_citations(agent_id, 20)
+        cit_text = f"📚 DOKUMENTEN-ZITATE ({len(citations)})\n\n"
+        if citations:
+            for cit in citations[:20]:
+                cit_text += f"  • {cit.get('quoted_text', '')[:100]}\n"
+                cit_text += f"    📁 {cit.get('project', '?')}/{cit.get('document', '?')}\n"
+                cit_text += f"    ⭐ Genauigkeit: {cit.get('accuracy', 0)*100:.0f}% | Punkte: {cit.get('points_awarded', 0)}\n\n"
+        else:
+            cit_text += "  Keine Dokumenten-Zitate vorhanden.\n"
+        self.pool_detail_citations.insert(tk.END, cit_text)
+        
+        self.pool_detail_external.delete(1.0, tk.END)
+        ext_citations = self.sim.db.get_agent_external_citations(agent_id, 20)
+        ext_text = f"📖 EXTERNE ZITATE ({len(ext_citations)})\n\n"
+        if ext_citations:
+            for cit in ext_citations[:20]:
+                ext_text += f"  • {cit.get('source', '?')}\n"
+                if cit.get('quoted_text'):
+                    ext_text += f"    💬 {cit.get('quoted_text', '')[:100]}\n"
+                if cit.get('reference'):
+                    ext_text += f"    📖 {cit.get('reference', '')[:100]}\n"
+                ext_text += f"    📅 {cit.get('created_at', 'unbekannt')[:19]}\n\n"
+        else:
+            ext_text += "  Keine externen Zitate vorhanden.\n"
+        self.pool_detail_external.insert(tk.END, ext_text)
     
     def export_pool_results_json(self):
         try:
@@ -2706,8 +3238,6 @@ class SynthAgoraGUI:
         
         threading.Thread(target=load_thread, daemon=True).start()
     
-    # ==================== LADEN ====================
-    
     def load_selected_example(self):
         selection = self.example_combo.get()
         if not selection:
@@ -2718,8 +3248,6 @@ class SynthAgoraGUI:
             self.doc_text.delete(1.0, tk.END)
             self.doc_text.insert(1.0, content)
             self._update_status(f"📄 Beispiel geladen: {selection}")
-    
-    # ==================== KNOWLEDGE GRAPH ====================
     
     def show_knowledge_graph(self):
         stats = self.sim.knowledge_graph.get_stats()
@@ -2760,8 +3288,6 @@ class SynthAgoraGUI:
         for team in teams:
             self.knowledge_text.insert(tk.END, f"🏆 {team.get('name', 'Unbekannt')}\n   • {team.get('member_count', 0)} Mitglieder\n\n")
     
-    # ==================== DASHBOARD ====================
-    
     def refresh_dashboard(self):
         stats = self.sim.get_db_info()
         self.stats_labels["agents"].config(text=str(stats.get('total_agents', 0)))
@@ -2770,6 +3296,8 @@ class SynthAgoraGUI:
         self.stats_labels["facts"].config(text=str(stats.get('kg_nodes', 0)))
         self.stats_labels["contributions"].config(text=str(stats.get('contributions', 0)))
         self.stats_labels["points"].config(text=str(stats.get('total_points', 0)))
+        self.stats_labels["citations"].config(text=str(stats.get('citations', 0)))
+        self.stats_labels["external_citations"].config(text=str(stats.get('external_citations', 0)))
         
         self.rank_leaderboard_listbox.delete(0, tk.END)
         leaderboard = self.sim.db.get_leaderboard_by_rank(15)
@@ -2847,8 +3375,6 @@ class SynthAgoraGUI:
         self.prognosis_listbox.insert(tk.END, f"Verifiziert: {prognoses.get('verified', 0)}")
         self.prognosis_listbox.insert(tk.END, f"Genauigkeit: {prognoses.get('accuracy', 0):.1f}%")
     
-    # ==================== CONFIG ====================
-    
     def test_connection(self):
         provider = self.provider_var.get()
         Config.LM_PROVIDER = provider
@@ -2867,13 +3393,18 @@ class SynthAgoraGUI:
         Config.TEMPERATURE = self.temp_var.get()
         Config.MAX_TOKENS = self.tokens_var.get()
         Config.TIMEOUT = self.timeout_var.get()
+        
+        Config.EMBEDDING_PROVIDER = self.embedding_provider_var.get()
+        Config.EMBEDDING_MODEL = self.embedding_model_var.get()
+        
         self.sim.lm.provider = Config.LM_PROVIDER
+        self.sim.embedding_client.provider = Config.EMBEDDING_PROVIDER
+        self.sim.embedding_client.model = Config.EMBEDDING_MODEL
+        
         if Config.save_to_file():
             messagebox.showinfo("Erfolg", "✅ Einstellungen gespeichert!")
         else:
             messagebox.showerror("Fehler", "❌ Speichern fehlgeschlagen!")
-    
-    # ==================== PLUGINS ====================
     
     def toggle_external(self):
         self.sim.plugin_manager.use_external = self.use_external_var.get()
@@ -2908,8 +3439,6 @@ class SynthAgoraGUI:
                 if key in self.sim.plugin_manager.get_all_plugins():
                     self.sim.plugin_manager.get_all_plugins()[key].enabled = enabled
     
-    # ==================== CHAT ====================
-    
     def export_chat(self):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"{Config.EXPORTS_FOLDER}/chat_{timestamp}.txt"
@@ -2927,8 +3456,6 @@ class SynthAgoraGUI:
     
     def _update_status(self, text):
         self.statusbar.config(text=text)
-    
-    # ==================== DOKUMENTEN-LOADER ====================
     
     def load_url(self):
         url = self.url_entry.get().strip()
@@ -3039,8 +3566,6 @@ class SynthAgoraGUI:
             self._update_status(f"📋 Dokument als Diskussionsgrundlage übernommen")
         else:
             messagebox.showwarning("Achtung", "Kein Dokument geladen!")
-    
-    # ==================== VISUALISIERUNG ====================
     
     def show_network_graph(self):
         self.viz_status.config(text="📊 Erstelle Netzwerk-Graph...")
@@ -3284,8 +3809,6 @@ class SynthAgoraGUI:
                 html_path = path.replace('.pdf', '.html')
                 if os.path.exists(html_path):
                     webbrowser.open(html_path)
-    
-    # ==================== ERGEBNIS-ANALYSE ====================
     
     def analyze_current_discussion(self):
         if not self.sim.discussion_log:
