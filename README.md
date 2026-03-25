@@ -1,4 +1,4 @@
-# SynthAgora (0.3B - 21.03.2026)
+# SynthAgora (0.4B - 25.03.2026)
 
 **Multi-Agent AI Debate Simulator** – KI-Agenten diskutieren kontroverse Themen mit **echtem Gedächtnis**, **Wiederholungsverbot** und **Ausschluss** bei Regelverstößen. Powered by lokalen LLMs (LM Studio, Ollama).
 
