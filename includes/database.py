@@ -2,8 +2,6 @@
 # -*- coding: utf-8 -*-
 """
 SQLite-Datenbank für SynthAgora
-- Jede Methode öffnet und schließt ihre eigene Verbindung
-- Keine Thread-Local Storage Probleme
 """
 
 import sqlite3
@@ -12,6 +10,7 @@ import os
 import re
 import time
 import uuid
+import hashlib
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 
@@ -28,10 +27,10 @@ class SynthAgoraDB:
             self.db_path = db_path
         
         self._init_database()
+        self._migrate_existing()
         print(f"✅ Datenbank: {self.db_path}")
     
     def _get_connection(self):
-        """Öffnet eine neue Verbindung"""
         conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
@@ -54,16 +53,17 @@ class SynthAgoraDB:
     def is_duplicate_fact(self, fact: str, topic: str, similarity_threshold: float = None) -> bool:
         if similarity_threshold is None:
             similarity_threshold = Config.DUPLICATE_SIMILARITY_THRESHOLD
-        
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
+            # Verbesserte Query: nur die relevantesten Fakten prüfen
             cursor.execute("""
                 SELECT fact FROM memory_crystals mc
                 JOIN memory_rooms mr ON mc.room_id = mr.room_id
-                WHERE mc.topic = ?
+                WHERE mc.topic = ? OR mc.topic IS NULL
+                ORDER BY mc.importance DESC
+                LIMIT 100
             """, (topic,))
-            
             facts = [row[0] for row in cursor.fetchall()]
             for existing_fact in facts:
                 if self._text_similarity(fact, existing_fact) > similarity_threshold:
@@ -79,7 +79,6 @@ class SynthAgoraDB:
         if not role:
             return "Unbekannt"
         role_lower = role.lower()
-        
         if any(w in role_lower for w in ["arzt", "ärztin", "chirurg"]):
             return "Arzt/Ärztin"
         if any(w in role_lower for w in ["krankenschwester", "pfleger", "pflegekraft"]):
@@ -90,7 +89,6 @@ class SynthAgoraDB:
             return "Richter/Richterin"
         if any(w in role_lower for w in ["lehrer", "lehrerin"]):
             return "Lehrer/Lehrerin"
-        
         role = re.sub(r'\([^)]*\)', '', role)
         words = role.strip().split()[:2]
         return " ".join(words).strip()
@@ -146,7 +144,6 @@ class SynthAgoraDB:
                 )
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_agents_name ON agents(name)")
-            cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_unique_name ON agents(name) WHERE is_active = 1")
             
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS agent_skills (
@@ -399,10 +396,14 @@ class SynthAgoraDB:
                     position_z REAL,
                     connections TEXT,
                     metadata TEXT,
+                    source_project TEXT,
+                    source_document TEXT,
+                    source_chunk TEXT,
                     FOREIGN KEY (room_id) REFERENCES memory_rooms(room_id) ON DELETE CASCADE
                 )
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_crystals_room ON memory_crystals(room_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_crystals_fact ON memory_crystals(fact)")
             
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS memory_halls (
@@ -415,6 +416,120 @@ class SynthAgoraDB:
                     properties TEXT,
                     FOREIGN KEY (from_room) REFERENCES memory_rooms(room_id) ON DELETE CASCADE,
                     FOREIGN KEY (to_room) REFERENCES memory_rooms(room_id) ON DELETE CASCADE
+                )
+            """)
+            
+            # ==================== PROJEKT-TABELLEN ====================
+            
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS projects (
+                    project_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE,
+                    description TEXT,
+                    path TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    chunk_size INTEGER DEFAULT 1000,
+                    chunk_overlap INTEGER DEFAULT 200,
+                    embedding_model TEXT,
+                    document_count INTEGER DEFAULT 0,
+                    chunk_count INTEGER DEFAULT 0,
+                    metadata TEXT
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_projects_name ON projects(name)")
+            
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS project_documents (
+                    document_id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    title TEXT,
+                    original_path TEXT,
+                    parsed_path TEXT,
+                    hash TEXT UNIQUE,
+                    chunk_count INTEGER DEFAULT 0,
+                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    metadata TEXT,
+                    FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_project_docs_project ON project_documents(project_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_project_docs_hash ON project_documents(hash)")
+            
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS document_chunks (
+                    chunk_id TEXT PRIMARY KEY,
+                    document_id TEXT NOT NULL,
+                    project_id TEXT NOT NULL,
+                    chunk_index INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    chunk_hash TEXT UNIQUE,
+                    embedding BLOB,
+                    metadata TEXT,
+                    FOREIGN KEY (document_id) REFERENCES project_documents(document_id) ON DELETE CASCADE,
+                    FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_document ON document_chunks(document_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_project ON document_chunks(project_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_hash ON document_chunks(chunk_hash)")
+            
+            # ==================== ZITAT-TABELLEN ====================
+            
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS citations (
+                    citation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    agent_id TEXT NOT NULL,
+                    discussion_id TEXT,
+                    contribution_id INTEGER,
+                    project TEXT,
+                    document TEXT,
+                    chunk_hash TEXT,
+                    quoted_text TEXT,
+                    accuracy REAL DEFAULT 1.0,
+                    verified BOOLEAN DEFAULT 0,
+                    verified_by TEXT,
+                    verified_at TIMESTAMP,
+                    points_awarded INTEGER DEFAULT 0,
+                    source_type TEXT DEFAULT 'document',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (agent_id) REFERENCES agents(agent_id) ON DELETE CASCADE,
+                    FOREIGN KEY (discussion_id) REFERENCES discussions(discussion_id) ON DELETE SET NULL,
+                    FOREIGN KEY (contribution_id) REFERENCES contributions(contribution_id) ON DELETE SET NULL
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_citations_agent ON citations(agent_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_citations_discussion ON citations(discussion_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_citations_project ON citations(project)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_citations_type ON citations(source_type)")
+            
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS external_citations (
+                    citation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    agent_id TEXT NOT NULL,
+                    discussion_id TEXT,
+                    contribution_id INTEGER,
+                    source TEXT NOT NULL,
+                    quoted_text TEXT,
+                    reference TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (agent_id) REFERENCES agents(agent_id) ON DELETE CASCADE,
+                    FOREIGN KEY (discussion_id) REFERENCES discussions(discussion_id) ON DELETE SET NULL,
+                    FOREIGN KEY (contribution_id) REFERENCES contributions(contribution_id) ON DELETE SET NULL
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_ext_citations_agent ON external_citations(agent_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_ext_citations_source ON external_citations(source)")
+            
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS agent_projects (
+                    agent_id TEXT NOT NULL,
+                    project_id TEXT NOT NULL,
+                    loaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (agent_id, project_id),
+                    FOREIGN KEY (agent_id) REFERENCES agents(agent_id) ON DELETE CASCADE,
+                    FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
                 )
             """)
             
@@ -437,8 +552,9 @@ class SynthAgoraDB:
                 END;
             """)
             
+            # Default-Einstellungen
             defaults = [
-                ('db_version', '4.1', 'string', 'Datenbank-Schema-Version'),
+                ('db_version', '5.2', 'string', 'Datenbank-Schema-Version'),
                 ('total_agent_generations', '0', 'int', 'Anzahl generierter Agenten'),
                 ('total_discussions', '0', 'int', 'Anzahl Diskussionen'),
                 ('pool_size', '0', 'int', 'Anzahl Agenten im Pool'),
@@ -447,7 +563,10 @@ class SynthAgoraDB:
                 ('total_contributions', '0', 'int', 'Alle Beiträge'),
                 ('total_prognoses', '0', 'int', 'Alle Prognosen'),
                 ('accuracy_average', '0', 'float', 'Durchschnittliche Trefferquote'),
-                ('evolution_enabled', 'true', 'bool', 'Agenten-Evolution aktiviert')
+                ('evolution_enabled', 'true', 'bool', 'Agenten-Evolution aktiviert'),
+                ('citation_system_enabled', 'true', 'bool', 'Zitier-System aktiviert'),
+                ('total_citations', '0', 'int', 'Anzahl Dokumenten-Zitate insgesamt'),
+                ('total_external_citations', '0', 'int', 'Anzahl externe Zitate insgesamt')
             ]
             
             for key, value, typ, desc in defaults:
@@ -457,13 +576,333 @@ class SynthAgoraDB:
                 )
             
             conn.commit()
-            print("✅ Datenbank mit ALLEN Tabellen initialisiert")
+            print("✅ Datenbank initialisiert")
         except Exception as e:
-            print(f"❌ Fehler bei Datenbank-Initialisierung: {e}")
+            print(f"❌ Fehler: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             conn.close()
     
-    # ==================== POOL-METHODEN ====================
+    def _migrate_existing(self):
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            
+            # Prüfe und füge source_type Spalte hinzu falls nötig
+            cursor.execute("PRAGMA table_info(citations)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'source_type' not in columns:
+                try:
+                    cursor.execute("ALTER TABLE citations ADD COLUMN source_type TEXT DEFAULT 'document'")
+                    print("✅ Spalte source_type hinzugefügt")
+                except Exception as e:
+                    print(f"⚠️ {e}")
+            
+            # Prüfe und füge source_* Spalten hinzu falls nötig
+            cursor.execute("PRAGMA table_info(memory_crystals)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'source_project' not in columns:
+                cursor.execute("ALTER TABLE memory_crystals ADD COLUMN source_project TEXT")
+            if 'source_document' not in columns:
+                cursor.execute("ALTER TABLE memory_crystals ADD COLUMN source_document TEXT")
+            if 'source_chunk' not in columns:
+                cursor.execute("ALTER TABLE memory_crystals ADD COLUMN source_chunk TEXT")
+            
+            # Legacy-Dokumente migrieren
+            cursor.execute("SELECT COUNT(*) FROM projects")
+            if cursor.fetchone()[0] == 0:
+                legacy_docs = os.path.join(Config.KNOWLEDGE_FOLDER, "documents")
+                if os.path.exists(legacy_docs) and os.listdir(legacy_docs):
+                    print("📦 Migriere Legacy-Dokumente...")
+                    project_id = f"proj_legacy_{int(time.time())}"
+                    project_path = os.path.join(Config.PROJECTS_FOLDER, "Legacy")
+                    os.makedirs(project_path, exist_ok=True)
+                    os.makedirs(os.path.join(project_path, "documents", "original"), exist_ok=True)
+                    os.makedirs(os.path.join(project_path, "documents", "parsed"), exist_ok=True)
+                    cursor.execute("""
+                        INSERT INTO projects (project_id, name, description, path)
+                        VALUES (?, ?, ?, ?)
+                    """, (project_id, "Legacy", "Migrierte Dokumente", project_path))
+                    for filename in os.listdir(legacy_docs):
+                        if filename.endswith('.json'):
+                            filepath = os.path.join(legacy_docs, filename)
+                            try:
+                                with open(filepath, 'r', encoding='utf-8') as f:
+                                    doc_data = json.load(f)
+                                doc_id = f"doc_{hashlib.md5(filename.encode()).hexdigest()[:12]}"
+                                cursor.execute("""
+                                    INSERT INTO project_documents 
+                                    (document_id, project_id, source, title, original_path, parsed_path, hash)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                                """, (doc_id, project_id, filepath, doc_data.get('title', filename), 
+                                      filepath, filepath, doc_data.get('hash', filename)))
+                                print(f"  ✅ {filename}")
+                            except Exception as e:
+                                print(f"  ⚠️ {filename}: {e}")
+                    conn.commit()
+                    print("✅ Legacy-Migration abgeschlossen")
+        except Exception as e:
+            print(f"⚠️ Migration: {e}")
+        finally:
+            conn.close()
+    
+    # ==================== PROJEKT-METHODEN ====================
+    
+    def create_project(self, name: str, description: str = "", chunk_size: int = None, 
+                       chunk_overlap: int = None, embedding_model: str = None) -> str:
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            project_id = f"proj_{name.lower().replace(' ', '_')}_{int(time.time())}"
+            project_path = os.path.join(Config.PROJECTS_FOLDER, name)
+            cursor.execute("""
+                INSERT INTO projects 
+                (project_id, name, description, path, chunk_size, chunk_overlap, embedding_model)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                project_id, name, description, project_path,
+                chunk_size or Config.DEFAULT_CHUNK_SIZE,
+                chunk_overlap or Config.DEFAULT_CHUNK_OVERLAP,
+                embedding_model or Config.EMBEDDING_MODEL
+            ))
+            conn.commit()
+            return project_id
+        finally:
+            conn.close()
+    
+    def get_project(self, project_id: str = None, name: str = None) -> Optional[Dict]:
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            if project_id:
+                cursor.execute("SELECT * FROM projects WHERE project_id = ?", (project_id,))
+            elif name:
+                cursor.execute("SELECT * FROM projects WHERE name = ?", (name,))
+            else:
+                return None
+            row = cursor.fetchone()
+            if row:
+                project = dict(row)
+                if project.get('metadata'):
+                    try:
+                        project['metadata'] = json.loads(project['metadata'])
+                    except:
+                        project['metadata'] = {}
+                return project
+            return None
+        finally:
+            conn.close()
+    
+    def get_all_projects(self) -> List[Dict]:
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM projects ORDER BY name")
+            projects = []
+            for row in cursor.fetchall():
+                project = dict(row)
+                if project.get('metadata'):
+                    try:
+                        project['metadata'] = json.loads(project['metadata'])
+                    except:
+                        project['metadata'] = {}
+                projects.append(project)
+            return projects
+        finally:
+            conn.close()
+    
+    def delete_project(self, project_id: str) -> bool:
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT path FROM projects WHERE project_id = ?", (project_id,))
+            row = cursor.fetchone()
+            if row and row['path']:
+                import shutil
+                if os.path.exists(row['path']):
+                    shutil.rmtree(row['path'])
+            cursor.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+    
+    def add_project_document(self, project_id: str, source: str, title: str = None,
+                             original_path: str = None, parsed_path: str = None,
+                             hash_value: str = None, chunk_count: int = 0,
+                             metadata: Dict = None) -> str:
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            if not hash_value:
+                hash_value = hashlib.md5(source.encode()).hexdigest()
+            doc_id = f"doc_{hash_value[:12]}"
+            metadata_json = json.dumps(metadata or {}, ensure_ascii=False)
+            cursor.execute("""
+                INSERT OR REPLACE INTO project_documents
+                (document_id, project_id, source, title, original_path, parsed_path, hash, chunk_count, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (doc_id, project_id, source, title, original_path, parsed_path, hash_value, chunk_count, metadata_json))
+            cursor.execute("""
+                UPDATE projects SET 
+                    document_count = (SELECT COUNT(*) FROM project_documents WHERE project_id = ?),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE project_id = ?
+            """, (project_id, project_id))
+            conn.commit()
+            return doc_id
+        finally:
+            conn.close()
+    
+    def get_project_documents(self, project_id: str) -> List[Dict]:
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM project_documents WHERE project_id = ? ORDER BY added_at DESC", (project_id,))
+            docs = []
+            for row in cursor.fetchall():
+                doc = dict(row)
+                if doc.get('metadata'):
+                    try:
+                        doc['metadata'] = json.loads(doc['metadata'])
+                    except:
+                        doc['metadata'] = {}
+                docs.append(doc)
+            return docs
+        finally:
+            conn.close()
+    
+    # ==================== ZITAT-METHODEN ====================
+    
+    def add_citation(self, agent_id: str, discussion_id: str, contribution_id: int,
+                     project: str, document: str, chunk_hash: str,
+                     quoted_text: str, accuracy: float = 1.0,
+                     points: int = 0, source_type: str = "document") -> int:
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO citations
+                (agent_id, discussion_id, contribution_id, project, document, chunk_hash, 
+                 quoted_text, accuracy, points_awarded, source_type)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (agent_id, discussion_id, contribution_id, project, document, 
+                  chunk_hash, quoted_text, accuracy, points, source_type))
+            citation_id = cursor.lastrowid
+            conn.commit()
+            return citation_id
+        finally:
+            conn.close()
+    
+    def add_external_citation(self, agent_id: str, discussion_id: str, contribution_id: int,
+                              source: str, quoted_text: str = "", reference: str = "") -> int:
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO external_citations
+                (agent_id, discussion_id, contribution_id, source, quoted_text, reference)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (agent_id, discussion_id, contribution_id, source, quoted_text, reference))
+            citation_id = cursor.lastrowid
+            conn.commit()
+            return citation_id
+        finally:
+            conn.close()
+    
+    def get_agent_citations(self, agent_id: str, limit: int = 100) -> List[Dict]:
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM citations 
+                WHERE agent_id = ? 
+                ORDER BY created_at DESC LIMIT ?
+            """, (agent_id, limit))
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+    
+    def get_agent_external_citations(self, agent_id: str, limit: int = 100) -> List[Dict]:
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM external_citations 
+                WHERE agent_id = ? 
+                ORDER BY created_at DESC LIMIT ?
+            """, (agent_id, limit))
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+    
+    def get_citation_stats(self, agent_id: str = None) -> Dict:
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            if agent_id:
+                cursor.execute("SELECT COUNT(*) FROM citations WHERE agent_id = ? AND source_type = 'document'", (agent_id,))
+                doc_total = cursor.fetchone()[0] or 0
+                cursor.execute("SELECT COUNT(*) FROM external_citations WHERE agent_id = ?", (agent_id,))
+                ext_total = cursor.fetchone()[0] or 0
+                return {"document_citations": doc_total, "external_citations": ext_total, "total": doc_total + ext_total}
+            else:
+                cursor.execute("SELECT COUNT(*) FROM citations WHERE source_type = 'document'")
+                doc_total = cursor.fetchone()[0] or 0
+                cursor.execute("SELECT COUNT(*) FROM external_citations")
+                ext_total = cursor.fetchone()[0] or 0
+                cursor.execute("SELECT COUNT(DISTINCT agent_id) FROM citations")
+                agents_with_citations = cursor.fetchone()[0] or 0
+                cursor.execute("SELECT AVG(accuracy) FROM citations WHERE source_type = 'document' AND accuracy IS NOT NULL")
+                avg_accuracy = cursor.fetchone()[0] or 0
+                return {
+                    "document_citations": doc_total, 
+                    "external_citations": ext_total, 
+                    "total": doc_total + ext_total,
+                    "agents_with_citations": agents_with_citations,
+                    "avg_accuracy": avg_accuracy
+                }
+        finally:
+            conn.close()
+    
+    def get_citation_leaderboard(self, limit: int = 10) -> List[Dict]:
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT a.name, a.role, COUNT(c.citation_id) as citation_count,
+                       AVG(c.accuracy) as avg_accuracy,
+                       COUNT(DISTINCT c.project) as projects_used
+                FROM citations c
+                JOIN agents a ON c.agent_id = a.agent_id
+                WHERE c.source_type = 'document'
+                GROUP BY c.agent_id
+                ORDER BY citation_count DESC, avg_accuracy DESC
+                LIMIT ?
+            """, (limit,))
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+    
+    def get_external_citation_leaderboard(self, limit: int = 10) -> List[Dict]:
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT a.name, a.role, COUNT(ec.citation_id) as citation_count,
+                       COUNT(DISTINCT ec.source) as sources_used
+                FROM external_citations ec
+                JOIN agents a ON ec.agent_id = a.agent_id
+                GROUP BY ec.agent_id
+                ORDER BY citation_count DESC
+                LIMIT ?
+            """, (limit,))
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+    
+    # ==================== AGENT-POOL-METHODEN ====================
     
     def add_to_pool(self, agent_data: Dict) -> str:
         conn = self._get_connection()
@@ -474,7 +913,6 @@ class SynthAgoraDB:
             existing = cursor.fetchone()
             if existing:
                 return existing[0]
-            
             metadata_json = json.dumps(agent_data.get("metadata", {}), ensure_ascii=False)
             cursor.execute("""
                 INSERT INTO agent_pool 
@@ -504,12 +942,12 @@ class SynthAgoraDB:
             row = cursor.fetchone()
             if row:
                 agent = dict(row)
-                if agent['tags']:
+                if agent.get('tags'):
                     try:
                         agent['tags'] = json.loads(agent['tags'])
                     except:
                         agent['tags'] = []
-                if agent['metadata']:
+                if agent.get('metadata'):
                     try:
                         agent['metadata'] = json.loads(agent['metadata'])
                     except:
@@ -539,39 +977,31 @@ class SynthAgoraDB:
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM agent_pool")
             total = cursor.fetchone()[0]
-            
             cursor.execute("SELECT role FROM agent_pool")
             all_roles = [row[0] for row in cursor.fetchall()]
-            
             normalized_roles = {}
             for role in all_roles:
                 norm_role = self._normalize_role(role)
                 normalized_roles[norm_role] = normalized_roles.get(norm_role, 0) + 1
             top_roles = sorted(normalized_roles.items(), key=lambda x: x[1], reverse=True)[:20]
-            
             cursor.execute("""
                 SELECT json_extract(metadata, '$.charakter_typ') as charakter, COUNT(*) as count
                 FROM agent_pool WHERE json_extract(metadata, '$.charakter_typ') IS NOT NULL
                 GROUP BY charakter ORDER BY count DESC
             """)
             charaktere = {row[0]: row[1] for row in cursor.fetchall()}
-            
             cursor.execute("""
                 SELECT json_extract(metadata, '$.team') as team, COUNT(*) as count
                 FROM agent_pool WHERE json_extract(metadata, '$.team') IS NOT NULL
                 GROUP BY team ORDER BY count DESC
             """)
             teams = {row[0]: row[1] for row in cursor.fetchall()}
-            
             cursor.execute("SELECT generation_mode, COUNT(*) FROM agent_pool GROUP BY generation_mode")
             modes = {row[0]: row[1] for row in cursor.fetchall()}
-            
             cursor.execute("SELECT COUNT(DISTINCT set_name) FROM agent_pool")
             sets = cursor.fetchone()[0]
-            
             cursor.execute("SELECT rank, COUNT(*) FROM agent_evolution GROUP BY rank")
             ranks = {row[0]: row[1] for row in cursor.fetchall()}
-            
             return {
                 "total": total, "roles": normalized_roles, "charaktere": charaktere,
                 "teams": teams, "modes": modes, "sets": sets, "top_roles": top_roles,
@@ -588,7 +1018,6 @@ class SynthAgoraDB:
             tokens = self._tokenize_query(query)
             if not tokens:
                 return []
-            
             conditions = []
             params = []
             for token in tokens:
@@ -597,19 +1026,17 @@ class SynthAgoraDB:
                     token_conditions.append(f"{field} LIKE ?")
                     params.append(f"%{token}%")
                 conditions.append("(" + " OR ".join(token_conditions) + ")")
-            
             where_clause = " AND ".join(conditions)
             cursor.execute(f"SELECT * FROM agent_pool WHERE {where_clause} ORDER BY name LIMIT ?", params + [limit])
-            
             results = []
             for row in cursor.fetchall():
                 agent = dict(row)
-                if agent['tags']:
+                if agent.get('tags'):
                     try:
                         agent['tags'] = json.loads(agent['tags'])
                     except:
                         agent['tags'] = []
-                if agent['metadata']:
+                if agent.get('metadata'):
                     try:
                         agent['metadata'] = json.loads(agent['metadata'])
                     except:
@@ -635,16 +1062,15 @@ class SynthAgoraDB:
             query += " ORDER BY RANDOM() LIMIT ?"
             params.append(count)
             cursor.execute(query, params)
-            
             results = []
             for row in cursor.fetchall():
                 agent = dict(row)
-                if agent['tags']:
+                if agent.get('tags'):
                     try:
                         agent['tags'] = json.loads(agent['tags'])
                     except:
                         agent['tags'] = []
-                if agent['metadata']:
+                if agent.get('metadata'):
                     try:
                         agent['metadata'] = json.loads(agent['metadata'])
                     except:
@@ -663,16 +1089,15 @@ class SynthAgoraDB:
             else:
                 conditions = ' OR '.join([f"tags LIKE '%{t}%'" for t in tags])
             cursor.execute(f"SELECT * FROM agent_pool WHERE {conditions} ORDER BY name LIMIT ?", [limit])
-            
             results = []
             for row in cursor.fetchall():
                 agent = dict(row)
-                if agent['tags']:
+                if agent.get('tags'):
                     try:
                         agent['tags'] = json.loads(agent['tags'])
                     except:
                         agent['tags'] = []
-                if agent['metadata']:
+                if agent.get('metadata'):
                     try:
                         agent['metadata'] = json.loads(agent['metadata'])
                     except:
@@ -704,7 +1129,7 @@ class SynthAgoraDB:
         finally:
             conn.close()
     
-    # ==================== AKTIVE AGENTEN ====================
+    # ==================== AKTIVE AGENTEN-METHODEN ====================
     
     def add_agent(self, agent_id: str, agent_data: Dict, pool_id: Optional[str] = None) -> bool:
         conn = self._get_connection()
@@ -714,14 +1139,11 @@ class SynthAgoraDB:
                 cursor.execute("SELECT agent_id FROM agent_pool WHERE agent_id = ?", (pool_id,))
                 if not cursor.fetchone():
                     pool_id = None
-            
             skills_json = json.dumps(agent_data.get('skills', {}), ensure_ascii=False)
             traits_json = json.dumps(agent_data.get('personality_traits', {}), ensure_ascii=False)
             metadata_json = json.dumps(agent_data.get('metadata', {}), ensure_ascii=False)
-            
             cursor.execute("SELECT agent_id FROM agents WHERE agent_id = ?", (agent_id,))
             existing = cursor.fetchone()
-            
             if existing:
                 cursor.execute("""
                     UPDATE agents SET pool_id = ?, name = ?, role = ?, personality = ?, color = ?,
@@ -745,7 +1167,6 @@ class SynthAgoraDB:
                       agent_data.get('team', ''), agent_data.get('team_role', 'Mitglied'),
                       agent_data.get('education', ''), agent_data.get('background', ''),
                       agent_data.get('training_level', 1.0), skills_json, traits_json, metadata_json))
-            
             conn.commit()
             return True
         finally:
@@ -779,7 +1200,6 @@ class SynthAgoraDB:
                 query += " WHERE is_active = 1"
             query += " ORDER BY name LIMIT ? OFFSET ?"
             cursor.execute(query, (limit, offset))
-            
             agents = []
             for row in cursor.fetchall():
                 agent = dict(row)
@@ -789,19 +1209,14 @@ class SynthAgoraDB:
                             agent[field] = json.loads(agent[field])
                         except:
                             agent[field] = {}
-                
-                # EVOLUTION-DATEN MITLADEN
                 evolution = self.get_agent_evolution(agent['agent_id'])
                 agent['evolution'] = evolution
                 agent['rank'] = evolution.get('rank', 'Junior')
                 agent['experience_points'] = evolution.get('experience_points', 0)
-                
                 agents.append(agent)
             return agents
         finally:
             conn.close()
-    
-    # ==================== SKILLS & EVOLUTION ====================
     
     def get_agent_skills(self, agent_id: str) -> Dict:
         conn = self._get_connection()
@@ -847,7 +1262,7 @@ class SynthAgoraDB:
             row = cursor.fetchone()
             if row:
                 result = dict(row)
-                if result['evolution_history']:
+                if result.get('evolution_history'):
                     try:
                         result['evolution_history'] = json.loads(result['evolution_history'])
                     except:
@@ -873,15 +1288,12 @@ class SynthAgoraDB:
             else:
                 current_points = row[0]
                 current_rank = row[1]
-            
             new_points = current_points + points
             rank_order = ["Junior", "Senior", "Experte", "Master"]
             thresholds = [0, 1000, 5000, 20000]
-            
             new_rank = current_rank
             rank_promoted = False
             history = []
-            
             cursor.execute("SELECT evolution_history FROM agent_evolution WHERE agent_id = ?", (agent_id,))
             hist_row = cursor.fetchone()
             if hist_row and hist_row[0]:
@@ -889,12 +1301,10 @@ class SynthAgoraDB:
                     history = json.loads(hist_row[0])
                 except:
                     history = []
-            
             for i, threshold in enumerate(thresholds):
                 if new_points >= threshold and i > rank_order.index(current_rank):
                     new_rank = rank_order[i]
                     rank_promoted = True
-            
             if rank_promoted:
                 history.append({
                     "timestamp": datetime.now().isoformat(),
@@ -903,7 +1313,6 @@ class SynthAgoraDB:
                     "points": new_points,
                     "reason": reason
                 })
-            
             cursor.execute("""
                 UPDATE agent_evolution SET experience_points = ?, rank = ?, evolution_history = ?,
                     last_promotion = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE last_promotion END,
@@ -1001,8 +1410,6 @@ class SynthAgoraDB:
         finally:
             conn.close()
     
-    # ==================== KNOWLEDGE GRAPH ====================
-    
     def add_node(self, node_id: str, node_type: str, properties: Dict) -> bool:
         conn = self._get_connection()
         try:
@@ -1026,7 +1433,7 @@ class SynthAgoraDB:
             row = cursor.fetchone()
             if row:
                 node = dict(row)
-                if node['properties']:
+                if node.get('properties'):
                     try:
                         node['properties'] = json.loads(node['properties'])
                     except:
@@ -1071,11 +1478,10 @@ class SynthAgoraDB:
             query += " ORDER BY strength DESC LIMIT ?"
             params.append(limit)
             cursor.execute(query, params)
-            
             edges = []
             for row in cursor.fetchall():
                 edge = dict(row)
-                if edge['properties']:
+                if edge.get('properties'):
                     try:
                         edge['properties'] = json.loads(edge['properties'])
                     except:
@@ -1090,7 +1496,6 @@ class SynthAgoraDB:
         try:
             cursor = conn.cursor()
             result = {'outgoing': [], 'incoming': [], 'total': 0}
-            
             if direction in ['out', 'both']:
                 cursor.execute("""
                     SELECT e.*, n.properties as target_properties
@@ -1099,13 +1504,12 @@ class SynthAgoraDB:
                 """, (node_id,))
                 for row in cursor.fetchall():
                     edge = dict(row)
-                    if edge['properties']:
+                    if edge.get('properties'):
                         try:
                             edge['properties'] = json.loads(edge['properties'])
                         except:
                             edge['properties'] = {}
                     result['outgoing'].append(edge)
-            
             if direction in ['in', 'both']:
                 cursor.execute("""
                     SELECT e.*, n.properties as source_properties
@@ -1114,13 +1518,12 @@ class SynthAgoraDB:
                 """, (node_id,))
                 for row in cursor.fetchall():
                     edge = dict(row)
-                    if edge['properties']:
+                    if edge.get('properties'):
                         try:
                             edge['properties'] = json.loads(edge['properties'])
                         except:
                             edge['properties'] = {}
                     result['incoming'].append(edge)
-            
             result['total'] = len(result['outgoing']) + len(result['incoming'])
             return result
         finally:
@@ -1143,8 +1546,6 @@ class SynthAgoraDB:
             return cursor.fetchone()[0]
         finally:
             conn.close()
-    
-    # ==================== THEMEN ====================
     
     def add_topic(self, topic_id: str, name: str, description: str = '', properties: Dict = None) -> bool:
         conn = self._get_connection()
@@ -1188,7 +1589,7 @@ class SynthAgoraDB:
             nodes = []
             for row in cursor.fetchall():
                 node = dict(row)
-                if node['properties']:
+                if node.get('properties'):
                     try:
                         node['properties'] = json.loads(node['properties'])
                     except:
@@ -1206,7 +1607,7 @@ class SynthAgoraDB:
             topics = []
             for row in cursor.fetchall():
                 topic = dict(row)
-                if topic['properties']:
+                if topic.get('properties'):
                     try:
                         topic['properties'] = json.loads(topic['properties'])
                     except:
@@ -1215,8 +1616,6 @@ class SynthAgoraDB:
             return topics
         finally:
             conn.close()
-    
-    # ==================== EINFLÜSSE ====================
     
     def add_influence(self, influencer_id: str, influenced_id: str, topic_id: Optional[str] = None,
                       strength: float = 0.5, description: str = '') -> int:
@@ -1245,7 +1644,6 @@ class SynthAgoraDB:
                 WHERE i.influencer_id = ? OR i.influenced_id = ?
                 ORDER BY i.timestamp DESC
             """, (agent_id, agent_id))
-            
             given = []
             received = []
             for row in cursor.fetchall():
@@ -1254,12 +1652,9 @@ class SynthAgoraDB:
                     given.append({'to': infl['influenced_id'], 'strength': infl['strength'], 'timestamp': infl['timestamp']})
                 else:
                     received.append({'from': infl['influencer_id'], 'strength': infl['strength'], 'timestamp': infl['timestamp']})
-            
             return {'given': given, 'received': received, 'given_count': len(given), 'received_count': len(received)}
         finally:
             conn.close()
-    
-    # ==================== PROGNOSEN ====================
     
     def add_prognosis(self, agent_id: str, topic: str, prediction: str, confidence: float = 0.5) -> int:
         conn = self._get_connection()
@@ -1313,12 +1708,9 @@ class SynthAgoraDB:
                 else:
                     correct = 0
                     accuracy = 0
-            
             return {"total": total, "verified": verified, "correct": correct, "accuracy": accuracy, "pending": total - verified}
         finally:
             conn.close()
-    
-    # ==================== TEAMS ====================
     
     def add_team(self, team_id: str, name: str, description: str = '', properties: Dict = None,
                  leader_id: Optional[str] = None) -> bool:
@@ -1356,20 +1748,17 @@ class SynthAgoraDB:
             team_row = cursor.fetchone()
             if not team_row:
                 return None
-            
             team = dict(team_row)
-            if team['properties']:
+            if team.get('properties'):
                 try:
                     team['properties'] = json.loads(team['properties'])
                 except:
                     team['properties'] = {}
-            
             cursor.execute("""
                 SELECT a.*, tm.role as team_role FROM agents a
                 JOIN team_members tm ON a.agent_id = tm.agent_id
                 WHERE tm.team_id = ? AND a.is_active = 1 ORDER BY a.name
             """, (team_id,))
-            
             members = []
             for row in cursor.fetchall():
                 member = dict(row)
@@ -1380,7 +1769,6 @@ class SynthAgoraDB:
                         except:
                             member[field] = {}
                 members.append(member)
-            
             team['members'] = members
             team['member_count'] = len(members)
             return team
@@ -1399,7 +1787,7 @@ class SynthAgoraDB:
             teams = []
             for row in cursor.fetchall():
                 team = dict(row)
-                if team['properties']:
+                if team.get('properties'):
                     try:
                         team['properties'] = json.loads(team['properties'])
                     except:
@@ -1409,29 +1797,18 @@ class SynthAgoraDB:
         finally:
             conn.close()
     
-    # ==================== DISKUSSIONEN ====================
-    
     def start_discussion(self, discussion_id: str, topic: str, purpose: str = '', goal: str = '',
                          moderator_name: Optional[str] = None, metadata: Dict = None) -> bool:
-        """
-        Startet eine Diskussion.
-        FIX: moderator_name statt moderator_id - sucht oder erstellt den Moderator.
-        """
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            
-            # Moderator-ID finden oder erstellen
             moderator_id = None
             if moderator_name:
-                # Suche nach Moderator in agents Tabelle
                 cursor.execute("SELECT agent_id FROM agents WHERE name = ? AND role LIKE '%Moderator%'", (moderator_name,))
                 row = cursor.fetchone()
                 if row:
                     moderator_id = row[0]
                 else:
-                    # Moderator als Agent anlegen, falls nicht existiert
-                    import uuid
                     moderator_id = f"mod_{uuid.uuid4().hex[:8]}"
                     try:
                         cursor.execute("""
@@ -1440,12 +1817,10 @@ class SynthAgoraDB:
                         """, (moderator_id, moderator_name, "Diskussionsmoderator", 
                               "Führt die Diskussion neutral und fair.", "#c586c0", 1))
                     except:
-                        # Falls schon existiert, nochmal versuchen zu finden
                         cursor.execute("SELECT agent_id FROM agents WHERE name = ?", (moderator_name,))
                         row2 = cursor.fetchone()
                         if row2:
                             moderator_id = row2[0]
-            
             metadata_json = json.dumps(metadata or {}, ensure_ascii=False)
             cursor.execute("""
                 INSERT INTO discussions (discussion_id, topic, purpose, goal, moderator_id, metadata)
@@ -1455,7 +1830,6 @@ class SynthAgoraDB:
             return True
         except Exception as e:
             print(f"⚠️ start_discussion Fehler: {e}")
-            # Fallback: Diskussion ohne Moderator speichern
             try:
                 metadata_json = json.dumps(metadata or {}, ensure_ascii=False)
                 cursor.execute("""
@@ -1490,7 +1864,6 @@ class SynthAgoraDB:
             cursor = conn.cursor()
             cursor.execute("SELECT agent_id FROM agents WHERE agent_id = ? AND is_active = 1", (agent_id,))
             if not cursor.fetchone():
-                # Agent existiert nicht, erstelle temporären Eintrag
                 try:
                     cursor.execute("""
                         INSERT INTO agents (agent_id, name, role, is_active)
@@ -1498,13 +1871,11 @@ class SynthAgoraDB:
                     """, (agent_id, agent_id, "Unbekannt", 1))
                 except:
                     pass
-            
             metadata_json = json.dumps(metadata or {}, ensure_ascii=False)
             cursor.execute("""
                 INSERT INTO contributions (discussion_id, agent_id, round_number, content, is_reaction, reacts_to, sentiment, metadata)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (discussion_id, agent_id, round_number, content, 1 if is_reaction else 0, reacts_to, sentiment, metadata_json))
-            
             contrib_id = cursor.lastrowid
             cursor.execute("""
                 UPDATE discussions SET contribution_count = contribution_count + 1,
@@ -1518,7 +1889,7 @@ class SynthAgoraDB:
         finally:
             conn.close()
     
-    # ==================== GEDÄCHTNIS ====================
+    # ==================== GEDÄCHTNIS-METHODEN ====================
     
     def create_memory_room(self, room_id: str, agent_id: str, name: str, size: float = 1.0,
                            color: str = '#4a90e2', properties: Dict = None) -> bool:
@@ -1535,8 +1906,20 @@ class SynthAgoraDB:
             """, (room_id, agent_id, name, size, color, props_json))
             conn.commit()
             return True
+        except Exception as e:
+            print(f"⚠️ create_memory_room Fehler: {e}")
+            return False
         finally:
             conn.close()
+    
+    def get_or_create_memory_room(self, agent_id: str) -> Dict:
+        room = self.get_memory_room(agent_id)
+        if room:
+            return room
+        room_id = f"room_{agent_id}"
+        name = f"{agent_id}_palace"
+        self.create_memory_room(room_id, agent_id, name)
+        return self.get_memory_room(agent_id) or {"room_id": room_id, "agent_id": agent_id, "crystal_count": 0}
     
     def get_memory_room(self, agent_id: str) -> Optional[Dict]:
         conn = self._get_connection()
@@ -1546,21 +1929,7 @@ class SynthAgoraDB:
             row = cursor.fetchone()
             if row:
                 room = dict(row)
-                if room['properties']:
-                    try:
-                        room['properties'] = json.loads(room['properties'])
-                    except:
-                        room['properties'] = {}
-                return room
-            
-            room_id = f"room_{agent_id}"
-            self.create_memory_room(room_id, agent_id, f"{agent_id}s Gedächtnis", size=1.0, color='#4a90e2')
-            
-            cursor.execute("SELECT * FROM memory_rooms WHERE agent_id = ?", (agent_id,))
-            row = cursor.fetchone()
-            if row:
-                room = dict(row)
-                if room['properties']:
+                if room.get('properties'):
                     try:
                         room['properties'] = json.loads(room['properties'])
                     except:
@@ -1572,39 +1941,39 @@ class SynthAgoraDB:
     
     def add_memory_crystal(self, crystal_id: str, room_id: str, fact: str, topic: Optional[str] = None,
                            importance: float = 0.5, position: Tuple[float, float, float] = (0, 0, 0),
-                           connections: List[str] = None, metadata: Dict = None) -> bool:
+                           connections: List[str] = None, metadata: Dict = None,
+                           source_project: str = None, source_document: str = None,
+                           source_chunk: str = None) -> bool:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
             if self.is_duplicate_fact(fact, topic):
                 return False
-            
             cursor.execute("SELECT crystal_id FROM memory_crystals WHERE crystal_id = ?", (crystal_id,))
             if cursor.fetchone():
                 return False
-            
             x, y, z = position
             conn_json = json.dumps(connections or [], ensure_ascii=False)
             meta_json = json.dumps(metadata or {}, ensure_ascii=False)
-            
             cursor.execute("""
-                INSERT INTO memory_crystals (crystal_id, room_id, fact, topic, importance,
-                    position_x, position_y, position_z, connections, metadata)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (crystal_id, room_id, fact, topic, importance, x, y, z, conn_json, meta_json))
-            
+                INSERT INTO memory_crystals 
+                (crystal_id, room_id, fact, topic, importance, position_x, position_y, position_z, 
+                 connections, metadata, source_project, source_document, source_chunk)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (crystal_id, room_id, fact, topic, importance, x, y, z, conn_json, meta_json,
+                  source_project, source_document, source_chunk))
             cursor.execute("UPDATE memory_rooms SET crystal_count = crystal_count + 1, updated_at = CURRENT_TIMESTAMP WHERE room_id = ?",
                           (room_id,))
             conn.commit()
             return True
+        except Exception as e:
+            print(f"⚠️ add_memory_crystal Fehler: {e}")
+            return False
         finally:
             conn.close()
     
     def get_agent_memories(self, agent_id: str, limit: int = 1000) -> List[Dict]:
-        room = self.get_memory_room(agent_id)
-        if not room:
-            return []
-        
+        room = self.get_or_create_memory_room(agent_id)
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
@@ -1612,16 +1981,15 @@ class SynthAgoraDB:
                 SELECT * FROM memory_crystals WHERE room_id = ?
                 ORDER BY importance DESC, access_count DESC, accessed_at DESC LIMIT ?
             """, (room['room_id'], limit))
-            
             crystals = []
             for row in cursor.fetchall():
                 crystal = dict(row)
-                if crystal['connections']:
+                if crystal.get('connections'):
                     try:
                         crystal['connections'] = json.loads(crystal['connections'])
                     except:
                         crystal['connections'] = []
-                if crystal['metadata']:
+                if crystal.get('metadata'):
                     try:
                         crystal['metadata'] = json.loads(crystal['metadata'])
                     except:
@@ -1641,10 +2009,8 @@ class SynthAgoraDB:
             row = cursor.fetchone()
             if not row:
                 return default
-            
             value = row['value']
             value_type = row['type']
-            
             if value_type == 'int':
                 return int(value)
             elif value_type == 'float':
@@ -1677,7 +2043,6 @@ class SynthAgoraDB:
             else:
                 value_type = 'string'
                 value = str(value)
-        
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
@@ -1719,20 +2084,26 @@ class SynthAgoraDB:
             stats['discussions'] = cursor.fetchone()[0]
             cursor.execute("SELECT SUM(contribution_count) FROM discussions")
             stats['contributions'] = cursor.fetchone()[0] or 0
-            
+            cursor.execute("SELECT COUNT(*) FROM projects")
+            stats['projects'] = cursor.fetchone()[0]
+            cursor.execute("SELECT SUM(document_count) FROM projects")
+            stats['project_documents'] = cursor.fetchone()[0] or 0
+            cursor.execute("SELECT SUM(chunk_count) FROM projects")
+            stats['project_chunks'] = cursor.fetchone()[0] or 0
+            cursor.execute("SELECT COUNT(*) FROM citations WHERE source_type = 'document'")
+            stats['citations'] = cursor.fetchone()[0] or 0
+            cursor.execute("SELECT COUNT(*) FROM external_citations")
+            stats['external_citations'] = cursor.fetchone()[0] or 0
             cursor.execute("SELECT AVG(fachwissen) FROM agent_skills")
             stats['avg_fachwissen'] = cursor.fetchone()[0] or 0
             cursor.execute("SELECT AVG(kommunikation) FROM agent_skills")
             stats['avg_kommunikation'] = cursor.fetchone()[0] or 0
             cursor.execute("SELECT AVG(analyse) FROM agent_skills")
             stats['avg_analyse'] = cursor.fetchone()[0] or 0
-            
             cursor.execute("SELECT rank, COUNT(*) FROM agent_evolution GROUP BY rank")
             stats['ranks'] = {row[0]: row[1] for row in cursor.fetchall()}
-            
             stats['db_version'] = self.get_setting('db_version', 'unknown')
             stats['kg_migrated'] = self.get_setting('kg_migrated', False)
-            
             return stats
         finally:
             conn.close()
@@ -1741,7 +2112,6 @@ class SynthAgoraDB:
         if backup_path is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             backup_path = os.path.join(Config.KNOWLEDGE_FOLDER, f"backup_{timestamp}.db")
-        
         import shutil
         shutil.copy2(self.db_path, backup_path)
         self.set_setting('last_backup', backup_path)

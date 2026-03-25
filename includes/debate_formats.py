@@ -114,6 +114,7 @@ class DebateSession:
         self.results = {}
         self.stop_event = threading.Event()
         self.is_running = False
+        self.discussion_log = []
         
         # Team-Zuordnung für Pro/Contra
         self.teams = {}
@@ -125,10 +126,6 @@ class DebateSession:
         if self.config.format not in ["pro_contra", "premise_check"]:
             return
         
-        print(f"🔧 Team-Zuordnung für {self.config.format}")
-        print(f"   Pro-Agenten aus Config: {self.config.pro_agents}")
-        print(f"   Contra-Agenten aus Config: {self.config.contra_agents}")
-        
         # Erstelle Mapping von Namen zu Agent-Objekten
         agent_by_name = {a.name: a for a in self.agents}
         
@@ -137,14 +134,9 @@ class DebateSession:
             for name in self.config.pro_agents:
                 if name in agent_by_name:
                     self.teams[name] = "pro"
-                else:
-                    print(f"⚠️ Pro-Agent '{name}' nicht in Agentenliste")
-            
             for name in self.config.contra_agents:
                 if name in agent_by_name:
                     self.teams[name] = "contra"
-                else:
-                    print(f"⚠️ Contra-Agent '{name}' nicht in Agentenliste")
         else:
             # Automatische Zufallsverteilung
             shuffled = self.agents.copy()
@@ -154,11 +146,14 @@ class DebateSession:
                 self.teams[agent.name] = "pro"
             for agent in shuffled[half:]:
                 self.teams[agent.name] = "contra"
-        
-        print(f"   Zuordnung: {len([t for t in self.teams.values() if t == 'pro'])} Pro, {len([t for t in self.teams.values() if t == 'contra'])} Contra")
     
     def get_team(self, agent_name: str) -> Optional[str]:
         return self.teams.get(agent_name)
+    
+    def add_to_log(self, text: str):
+        self.discussion_log.append(text)
+        if len(self.discussion_log) > 500:
+            self.discussion_log = self.discussion_log[-500:]
     
     def start(self, callback: Callable = None) -> Generator:
         self.is_running = True
@@ -211,6 +206,7 @@ class DebateSession:
                 if answer and answer not in ["[ABGEBROCHEN]", "[AUSGESCHLOSSEN]"]:
                     round_data.add_contribution(agent.name, answer, "pro")
                     yield ("agent", agent.name, answer, agent.color, "pro")
+                    self.add_to_log(f"[PRO] {agent.name}: {answer}")
             
             # Contra spricht
             yield ("system", "🎤 Contra-Team spricht:")
@@ -224,6 +220,7 @@ class DebateSession:
                 if answer and answer not in ["[ABGEBROCHEN]", "[AUSGESCHLOSSEN]"]:
                     round_data.add_contribution(agent.name, answer, "contra")
                     yield ("agent", agent.name, answer, agent.color, "contra")
+                    self.add_to_log(f"[CONTRA] {agent.name}: {answer}")
             
             if self.config.enable_voting:
                 yield ("system", "🗳️ Abstimmung")
@@ -274,6 +271,7 @@ class DebateSession:
             yield ("round_start", f"Runde {round_num+1}/{self.config.rounds}")
             
             if self.config.prove_mode:
+                # Pro argumentiert FÜR die These
                 yield ("system", "✅ Pro-Team (Argumente FÜR die These):")
                 for agent in pro_agents:
                     if self.stop_event.is_set():
@@ -288,8 +286,10 @@ Aufgabe: Beweise diese These. Liefere ein Argument für deine Position (max 3 S�
                     if answer and answer not in ["[ABGEBROCHEN]", "[AUSGESCHLOSSEN]"]:
                         arguments_for.append({"agent": agent.name, "text": answer})
                         round_data.add_contribution(agent.name, answer, "pro")
-                        yield ("agent", agent.name, f"✅ {answer}", agent.color)
+                        yield ("agent", agent.name, f"✅ {answer}", agent.color, "pro")
+                        self.add_to_log(f"[PRO] {agent.name}: {answer}")
                 
+                # Contra argumentiert GEGEN die These
                 yield ("system", "❌ Contra-Team (Argumente GEGEN die These):")
                 for agent in contra_agents:
                     if self.stop_event.is_set():
@@ -304,9 +304,11 @@ Aufgabe: Widerlege diese These. Liefere ein Argument gegen die These (max 3 Sät
                     if answer and answer not in ["[ABGEBROCHEN]", "[AUSGESCHLOSSEN]"]:
                         arguments_against.append({"agent": agent.name, "text": answer})
                         round_data.add_contribution(agent.name, answer, "contra")
-                        yield ("agent", agent.name, f"❌ {answer}", agent.color)
+                        yield ("agent", agent.name, f"❌ {answer}", agent.color, "contra")
+                        self.add_to_log(f"[CONTRA] {agent.name}: {answer}")
             
             else:
+                # Widerlegungs-Modus: Contra beginnt
                 yield ("system", "❌ Contra-Team (Argumente GEGEN die These):")
                 for agent in contra_agents:
                     if self.stop_event.is_set():
@@ -321,8 +323,10 @@ Aufgabe: Widerlege diese These. Liefere ein Argument gegen die These (max 3 Sät
                     if answer and answer not in ["[ABGEBROCHEN]", "[AUSGESCHLOSSEN]"]:
                         arguments_against.append({"agent": agent.name, "text": answer})
                         round_data.add_contribution(agent.name, answer, "contra")
-                        yield ("agent", agent.name, f"❌ {answer}", agent.color)
+                        yield ("agent", agent.name, f"❌ {answer}", agent.color, "contra")
+                        self.add_to_log(f"[CONTRA] {agent.name}: {answer}")
                 
+                # Pro verteidigt
                 yield ("system", "✅ Pro-Team (Verteidigung):")
                 for agent in pro_agents:
                     if self.stop_event.is_set():
@@ -337,7 +341,8 @@ Aufgabe: Verteidige diese These. Liefere ein Argument für die These (max 3 Sät
                     if answer and answer not in ["[ABGEBROCHEN]", "[AUSGESCHLOSSEN]"]:
                         arguments_for.append({"agent": agent.name, "text": answer})
                         round_data.add_contribution(agent.name, answer, "pro")
-                        yield ("agent", agent.name, f"✅ {answer}", agent.color)
+                        yield ("agent", agent.name, f"✅ {answer}", agent.color, "pro")
+                        self.add_to_log(f"[PRO] {agent.name}: {answer}")
             
             self.rounds.append(round_data)
             yield ("round_end", f"Runde {round_num+1} beendet")
@@ -372,10 +377,12 @@ Aufgabe: Verteidige diese These. Liefere ein Argument für die These (max 3 Sät
                 if answer and answer not in ["[ABGEBROCHEN]", "[AUSGESCHLOSSEN]"]:
                     round_data.add_contribution(agent.name, answer)
                     yield ("agent", agent.name, answer, agent.color)
+                    self.add_to_log(f"{agent.name}: {answer}")
             
             self.rounds.append(round_data)
             yield ("round_end", f"Runde {round_num+1} beendet")
             
+            # Rotation
             if round_num < self.config.rounds - 1 and outer_agents:
                 new_inner = []
                 for agent in inner_agents:
@@ -415,7 +422,9 @@ Aufgabe: Verteidige diese These. Liefere ein Argument für die These (max 3 Sät
                     answer = self._get_agent_answer(agent, self.topic, None, round_num)
                     if answer and answer not in ["[ABGEBROCHEN]", "[AUSGESCHLOSSEN]"]:
                         yield ("agent", agent.name, f"[Tisch {table_idx+1}] {answer}", agent.color)
+                        self.add_to_log(f"[Tisch {table_idx+1}] {agent.name}: {answer}")
             
+            # Rotation
             if round_num < self.config.rotation_rounds - 1:
                 rotating = []
                 for table in tables:
@@ -458,7 +467,7 @@ Aufgabe: Verteidige diese These. Liefere ein Argument für die These (max 3 Sät
                     prompt = f"""Thema: {self.topic}
 
 Bewerte auf einer Skala von 1-10 (1 = stimme überhaupt nicht zu, 10 = stimme voll zu), wie sehr du der folgenden Aussage zustimmst:
-"Tierversuche in der medizinischen Forschung sollten verboten werden."
+"{self.config.premise or self.topic}"
 
 Gib deine Bewertung als Zahl und dann eine kurze Begründung (2-3 Sätze)."""
                 else:
@@ -467,7 +476,7 @@ Gib deine Bewertung als Zahl und dann eine kurze Begründung (2-3 Sätze)."""
 Feedback aus der letzten Runde: {feedback}
 
 Bewerte auf einer Skala von 1-10 (1 = stimme überhaupt nicht zu, 10 = stimme voll zu), wie sehr du der folgenden Aussage zustimmst:
-"Tierversuche in der medizinischen Forschung sollten verboten werden."
+"{self.config.premise or self.topic}"
 
 Gib deine Bewertung als Zahl und dann eine kurze Begründung (2-3 Sätze). Berücksichtige dabei das Feedback."""
                 
@@ -482,6 +491,7 @@ Gib deine Bewertung als Zahl und dann eine kurze Begründung (2-3 Sätze). Berü
                     if not self.config.anonymous_votes:
                         yield ("agent", agent.name, f"📊 {answer}", agent.color)
                     round_data.add_contribution(agent.name, answer)
+                    self.add_to_log(f"{agent.name}: {answer}")
             
             all_responses.append(responses)
             self.rounds.append(round_data)
@@ -514,6 +524,7 @@ Gib deine Bewertung als Zahl und dann eine kurze Begründung (2-3 Sätze). Berü
                 if answer and answer not in ["[ABGEBROCHEN]", "[AUSGESCHLOSSEN]"]:
                     round_data.add_contribution(agent.name, answer)
                     yield ("agent", agent.name, answer, agent.color)
+                    self.add_to_log(f"{agent.name}: {answer}")
             
             self.rounds.append(round_data)
             yield ("round_end", f"Runde {round_num+1} beendet")
@@ -522,11 +533,13 @@ Gib deine Bewertung als Zahl und dann eine kurze Begründung (2-3 Sätze). Berü
     
     def _get_agent_answer(self, agent, topic, document, round_num, context="", team=None) -> str:
         try:
-            prompt = topic
+            # Team-Information in Topic einbauen
             if team:
-                prompt = f"Du bist im Team {team.upper()}. {topic}"
+                topic_with_team = f"[TEAM {team.upper()}] {topic}"
+            else:
+                topic_with_team = topic
             
-            answer = agent.answer(prompt, document, self.lm, self.stop_event, round_num)
+            answer = agent.answer(topic_with_team, document, self.lm, self.stop_event, round_num)
             return answer
         except Exception as e:
             print(f"❌ Fehler bei Agent {agent.name}: {e}")
@@ -555,13 +568,12 @@ Begründe kurz (1 Satz)."""
     
     def _extract_score(self, text: str) -> int:
         """Extrahiert eine Zahl 1-10 aus Text"""
-        # Suche nach Zahlen wie "7", "8/10", "Bewertung: 5"
         patterns = [
-            r'\b([1-9]|10)\b',  # Einzelne Zahl
-            r'(\d+)/10',        # x/10 Format
-            r'Bewertung:?\s*(\d+)',  # "Bewertung: 7"
-            r'Punktzahl:?\s*(\d+)',  # "Punktzahl: 7"
-            r'(\d+)\s*Punkte',       # "7 Punkte"
+            r'\b([1-9]|10)\b',
+            r'(\d+)/10',
+            r'Bewertung:?\s*(\d+)',
+            r'Punktzahl:?\s*(\d+)',
+            r'(\d+)\s*Punkte',
         ]
         for pattern in patterns:
             match = re.search(pattern, text)
@@ -569,7 +581,7 @@ Begründe kurz (1 Satz)."""
                 val = int(match.group(1))
                 if 1 <= val <= 10:
                     return val
-        return 5  # Default
+        return 5
     
     def _check_consensus(self, responses: List[Dict]) -> bool:
         """Prüft ob Konsens erreicht wurde (80% innerhalb 2 Punkte)"""
@@ -589,7 +601,6 @@ Begründe kurz (1 Satz)."""
         avg = sum(scores) / len(scores) if scores else 0
         std = (sum((s - avg) ** 2 for s in scores) / len(scores)) ** 0.5 if scores else 0
         
-        # Sammle Begründungen
         reasons = []
         for r in last_round[:3]:
             reasons.append(f"{r['agent']}: {r['reasoning'][:100]}...")

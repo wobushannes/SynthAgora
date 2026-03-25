@@ -2,12 +2,6 @@
 # -*- coding: utf-8 -*-
 """
 Simulations-Kernmodul für SynthAgora
-- Agenten-Verwaltung
-- Diskussions-Steuerung
-- Debatten-Formate (Pro/Contra, Fishbowl, Delphi, etc.)
-- Dokumenten-Loader
-- Ergebnis-Analyse
-- Visualisierung
 """
 
 import json
@@ -18,9 +12,10 @@ import queue
 import random
 import hashlib
 import re
+import requests
 from datetime import datetime
 from typing import List, Dict, Optional, Any, Callable, Generator, Tuple
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .config import Config
 from .database import SynthAgoraDB
@@ -28,13 +23,32 @@ from .knowledge_graph import KnowledgeGraph
 from .agent import Agent
 from .agent_factory import AgentFactory
 from .task_manager import TaskManager, AnalysisJob
-from .plugins import PluginManager
-from .debate_formats import DebateSession, DebateConfig, get_available_formats
+from .plugin_manager import PluginManager
+from .debate_formats import get_available_formats, DebateSession, DebateConfig
 from .debate_controller import DebateController, SanctionType
 from .document_loader import DocumentLoader
 from .result_analyzer import ResultAnalyzer
 from .visualization import Visualization
 from .migrate import MigrationTool
+from .project_manager import ProjectManager
+from .embedding_client import EmbeddingClient
+
+
+class RateLimiter:
+    """Einfacher Rate-Limiter für API-Aufrufe"""
+    
+    def __init__(self, requests_per_second: float = 1.5):
+        self.interval = 1.0 / requests_per_second
+        self.last_call = 0
+        self.lock = threading.Lock()
+    
+    def wait(self):
+        with self.lock:
+            now = time.time()
+            elapsed = now - self.last_call
+            if elapsed < self.interval:
+                time.sleep(self.interval - elapsed)
+            self.last_call = time.time()
 
 
 class Moderator:
@@ -66,7 +80,9 @@ Thema: "{topic}". Stelle dich KURZ vor (max 2 Sätze)."""
         if not self.enabled or agent_name in self.abgebrochene_agenten:
             return None
         goal_text = f" Ziel der Diskussion: {self.discussion_goal}" if self.discussion_goal else ""
-        prompt = f"""Du bist {self.name}. Thema: {topic}.{goal_text}
+        # FIX: Document in Prompt einbauen
+        doc_text = f"\nDokument: {document[:500]}..." if document else ""
+        prompt = f"""Du bist {self.name}. Thema: {topic}.{goal_text}{doc_text}
 Stelle {agent_name} eine präzise Frage zum Thema. Max 2 Sätze.
 Verwende deinen Stil: {self.style}."""
         return lm.ask(prompt, f"Du bist {self.name}.", stop_event)
@@ -84,16 +100,16 @@ Verwende deinen Stil: {self.style}."""
 
 
 class LLMClient:
-    """LLM-Client für API-Aufrufe"""
+    """LLM-Client für API-Aufrufe mit Retry und Throttling"""
     
     def __init__(self):
         self.provider = Config.LM_PROVIDER
         self.session = None
-        self.stats = {"calls": 0, "errors": 0}
+        self.stats = {"calls": 0, "errors": 0, "retries": 0}
         self.is_processing = False
         self._executor = ThreadPoolExecutor(max_workers=3)
         self._futures = []
-        
+        self._rate_limiter = RateLimiter(requests_per_second=1.5)
         self._init_session()
     
     def _init_session(self):
@@ -124,6 +140,7 @@ class LLMClient:
                 if callback:
                     callback(result)
             except Exception as e:
+                # FIX: callback auch bei Exception aufrufen
                 if callback:
                     callback(f"[Fehler: {str(e)[:30]}]")
         
@@ -131,29 +148,48 @@ class LLMClient:
         self._futures.append(future)
     
     def ask(self, prompt: str, system: str = None, stop_event: threading.Event = None, 
-            callback: Callable = None, max_tokens: int = None) -> str:
-        self.stats["calls"] += 1
-        self.is_processing = True
+            callback: Callable = None, max_tokens: int = None, 
+            max_retries: int = 3, retry_delay: float = 2.0) -> str:
         
-        try:
+        self._rate_limiter.wait()
+        
+        for attempt in range(max_retries):
             if stop_event and stop_event.is_set():
                 self.is_processing = False
                 return "[ABGEBROCHEN]"
             
-            if self.provider == "lmstudio":
-                result = self._ask_lmstudio(prompt, system, stop_event, callback, max_tokens)
-            elif self.provider == "ollama":
-                result = self._ask_ollama(prompt, system, stop_event, callback, max_tokens)
-            else:
-                result = self._ask_beta(prompt, system)
+            self.stats["calls"] += 1
+            self.is_processing = True
             
-            self.is_processing = False
-            return result
+            try:
+                if self.provider == "lmstudio":
+                    result = self._ask_lmstudio(prompt, system, stop_event, callback, max_tokens)
+                elif self.provider == "ollama":
+                    result = self._ask_ollama(prompt, system, stop_event, callback, max_tokens)
+                else:
+                    result = self._ask_beta(prompt, system)
                 
-        except Exception as e:
-            self.stats["errors"] += 1
-            self.is_processing = False
-            return f"[Fehler: {str(e)[:30]}]"
+                self.is_processing = False
+                
+                if result and result.startswith("[Fehler"):
+                    raise Exception(result)
+                
+                return result
+                
+            except Exception as e:
+                self.stats["errors"] += 1
+                self.stats["retries"] += 1
+                
+                if attempt < max_retries - 1:
+                    print(f"⚠️ API-Fehler (Versuch {attempt+1}/{max_retries}): {e}")
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    self.is_processing = False
+                    return f"[Fehler: {str(e)[:30]}]"
+        
+        self.is_processing = False
+        return "[Fehler: Max Retries]"
     
     def _ask_lmstudio(self, prompt: str, system: str = None, stop_event=None, 
                       callback=None, max_tokens=None) -> str:
@@ -162,20 +198,35 @@ class LLMClient:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
         
-        r = self.session.post(Config.LM_STUDIO_URL, json={
-            "messages": messages,
-            "max_tokens": max_tokens or Config.MAX_TOKENS,
-            "temperature": Config.TEMPERATURE,
-            "stop": ["\n\n", "User:", "Assistant:"]
-        }, timeout=Config.TIMEOUT)
-        
-        if stop_event and stop_event.is_set():
-            return "[ABGEBROCHEN]"
-        
-        text = r.json()["choices"][0]["message"]["content"]
-        text = re.sub(r'(?i)(thinking|thought).*?(\n|$)', '', text)
-        text = re.sub(r'\s+', ' ', text).strip()
-        return text if text else "..."
+        try:
+            r = self.session.post(Config.LM_STUDIO_URL, json={
+                "messages": messages,
+                "max_tokens": max_tokens or Config.MAX_TOKENS,
+                "temperature": Config.TEMPERATURE,
+                "stop": ["\n\n", "User:", "Assistant:"]
+            }, timeout=Config.TIMEOUT)
+            
+            if stop_event and stop_event.is_set():
+                return "[ABGEBROCHEN]"
+            
+            if r.status_code != 200:
+                raise Exception(f"HTTP {r.status_code}: {r.text[:100]}")
+            
+            data = r.json()
+            if "choices" not in data:
+                raise Exception(f"Unerwartete Antwort: {list(data.keys())}")
+            
+            text = data["choices"][0]["message"]["content"]
+            text = re.sub(r'(?i)(thinking|thought).*?(\n|$)', '', text)
+            text = re.sub(r'\s+', ' ', text).strip()
+            return text if text else "..."
+            
+        except requests.exceptions.Timeout:
+            raise Exception("Timeout")
+        except requests.exceptions.ConnectionError:
+            raise Exception("Connection Error - Ist LM Studio gestartet?")
+        except Exception as e:
+            raise Exception(str(e))
     
     def _ask_ollama(self, prompt: str, system: str = None, stop_event=None,
                     callback=None, max_tokens=None) -> str:
@@ -184,22 +235,37 @@ class LLMClient:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
         
-        r = self.session.post(Config.OLLAMA_URL, json={
-            "model": Config.OLLAMA_MODEL,
-            "messages": messages,
-            "stream": False,
-            "options": {
-                "temperature": Config.TEMPERATURE,
-                "num_predict": max_tokens or Config.MAX_TOKENS
-            }
-        }, timeout=Config.TIMEOUT)
-        
-        if stop_event and stop_event.is_set():
-            return "[ABGEBROCHEN]"
-        
-        text = r.json()["message"]["content"]
-        text = re.sub(r'\s+', ' ', text).strip()
-        return text if text else "..."
+        try:
+            r = self.session.post(Config.OLLAMA_URL, json={
+                "model": Config.OLLAMA_MODEL,
+                "messages": messages,
+                "stream": False,
+                "options": {
+                    "temperature": Config.TEMPERATURE,
+                    "num_predict": max_tokens or Config.MAX_TOKENS
+                }
+            }, timeout=Config.TIMEOUT)
+            
+            if stop_event and stop_event.is_set():
+                return "[ABGEBROCHEN]"
+            
+            if r.status_code != 200:
+                raise Exception(f"HTTP {r.status_code}")
+            
+            data = r.json()
+            if "message" not in data:
+                raise Exception(f"Unerwartete Antwort: {list(data.keys())}")
+            
+            text = data["message"]["content"]
+            text = re.sub(r'\s+', ' ', text).strip()
+            return text if text else "..."
+            
+        except requests.exceptions.Timeout:
+            raise Exception("Timeout")
+        except requests.exceptions.ConnectionError:
+            raise Exception("Connection Error - Ist Ollama gestartet?")
+        except Exception as e:
+            raise Exception(str(e))
     
     def _ask_beta(self, prompt: str, system: str = None) -> str:
         return f"[{self.provider} - Kein API-Key konfiguriert]\nPrompt: {prompt[:100]}..."
@@ -267,13 +333,14 @@ class Simulation:
         self.agent_factory = AgentFactory(self.lm)
         self.task_manager = TaskManager(max_workers=5)
         self.plugin_manager = PluginManager()
+        self.plugin_manager.set_lm(self.lm)
         
-        # Neue Module
         self.document_loader = DocumentLoader()
         self.result_analyzer = ResultAnalyzer(self.lm)
         self.visualization = Visualization()
+        self.embedding_client = EmbeddingClient()
+        self.project_manager = ProjectManager()
         
-        # Agenten und Diskussion
         self.agents: List[Agent] = []
         self.moderator: Optional[Moderator] = None
         self.stop_event = threading.Event()
@@ -286,18 +353,27 @@ class Simulation:
         self.team_mode = False
         self.current_discussion_id = None
         self.discussion_purpose = ""
+        self.discussion_goal = ""  # FIX: goal speichern
+        self.active_projects: List[str] = []
+        self.debate_settings: Dict = {}
         
-        # Debatten
         self.debate_session: Optional[DebateSession] = None
         self.debate_controller: Optional[DebateController] = None
         self.current_debate_format = "classic"
+        
+        # FIX: Thread-Pool für lernen (statt unkontrollierte Thread-Flut)
+        self._learn_executor = ThreadPoolExecutor(max_workers=5)
+        self._learn_futures = []
         
         self.stats = {
             "total_contributions": 0,
             "start_time": None,
             "end_time": None,
             "current_round": 0,
-            "max_rounds": 0
+            "max_rounds": 0,
+            "citations_total": 0,
+            "external_citations_total": 0,
+            "api_retries": 0
         }
         
         self._auto_migrate()
@@ -318,10 +394,7 @@ class Simulation:
     def set_callback(self, callback):
         self._callback = callback
     
-    # ==================== AGENTEN-VERWALTUNG ====================
-    
     def load_agents_from_pool(self, agent_names: List[str]) -> bool:
-        """Lädt Agenten aus der Datenbank"""
         try:
             self.agents = []
             self.teams = {}
@@ -346,7 +419,6 @@ class Simulation:
                         if isinstance(meta, str):
                             meta = json.loads(meta)
                     
-                    # Persönlichkeit aus Metadaten oder JSON-File
                     personality = meta.get("personality", "")
                     if not personality and pool_agent.get("json_file"):
                         try:
@@ -380,6 +452,8 @@ class Simulation:
                     
                     agent = Agent(agent_data, self.knowledge_graph, self.plugin_manager)
                     agent.set_db(self.db)
+                    agent.set_simulation(self)
+                    agent.set_project_manager(self.project_manager)
                     agent.set_external_source(self.plugin_manager)
                     self.agents.append(agent)
                     
@@ -416,56 +490,40 @@ class Simulation:
     
     def set_discussion_purpose(self, purpose: str, goal: str = None):
         self.discussion_purpose = purpose
+        self.discussion_goal = goal or ""
         if self.moderator and goal:
             self.moderator.set_discussion_goal(goal)
     
-    # ==================== DISKUSSION (KLASSISCH) ====================
+    def set_active_projects(self, project_names: List[str], retrieval_k: int = 5):
+        self.active_projects = project_names
+        for agent in self.agents:
+            agent.set_projects(project_names, retrieval_k)
+        print(f"📁 Aktive Projekte: {project_names} (k={retrieval_k})")
     
     def start_discussion(self, topic: str, document: Optional[str], 
                          rounds: int = 2, use_moderator: bool = True,
                          team_mode: bool = False):
-        """Startet eine klassische Diskussion"""
-        self.stop_event.clear()
-        self.is_running = True
-        self.discussion_log = []
-        self.current_topic = topic
-        self.current_round = 0
-        self.max_rounds = rounds
-        self.team_mode = team_mode
-        self.stats["start_time"] = datetime.now().isoformat()
-        self.stats["total_contributions"] = 0
-        
-        for agent in self.agents:
-            agent.schon_gesagtes = []
-            agent.wiederholungen = 0
-            agent.ausgeschlossen = False
-            agent.discussion_log = self.discussion_log
-        
-        self.current_discussion_id = f"disc_{int(time.time())}"
-        self.db.start_discussion(
-            self.current_discussion_id, topic, 
-            self.discussion_purpose or "Diskussion",
-            self.moderator.discussion_goal if self.moderator else None,
-            self.moderator.name if self.moderator else None
-        )
-        
-        if self.moderator:
-            self.moderator.enabled = use_moderator
-            self.moderator.evasions = {}
-            self.moderator.abgebrochene_agenten = set()
-        
-        try:
-            yield from self._run_discussion(topic, document, rounds, use_moderator, team_mode)
-        finally:
-            self._cleanup_duplicate_memories()
-        
-        self.stats["end_time"] = datetime.now().isoformat()
-        self.is_running = False
-        self.stop_event.clear()
+        """Legacy-Methode - wird durch start_debate ersetzt"""
+        config = {
+            "format": "classic",
+            "rounds": rounds,
+            "use_moderator": use_moderator,
+            "pro_agents": [],
+            "contra_agents": []
+        }
+        return self.start_debate(topic, document, config)
     
-    def _run_discussion(self, topic: str, document: Optional[str],
-                        rounds: int, use_moderator: bool, team_mode: bool):
-        """Interne Diskussions-Logik"""
+    def _run_debate_loop(self, topic: str, document: Optional[str], config: Dict,
+                          use_moderator: bool, projects: List[str],
+                          pro_agents: List[str], contra_agents: List[str]) -> Generator:
+        """Haupt-Debatten-Loop (einheitlich für alle Formate)"""
+        rounds = config.get("rounds", 3)
+        
+        # Team-Modus für Pro/Contra
+        is_pro_contra = config.get("format") == "pro_contra"
+        pro_names = set(pro_agents)
+        contra_names = set(contra_agents)
+        
         for round_num in range(rounds):
             if self.stop_event.is_set():
                 break
@@ -474,14 +532,45 @@ class Simulation:
             yield ("system", f"--- RUNDE {round_num+1}/{rounds} ---")
             yield ("round_update", f"Runde {round_num+1}/{rounds}")
             
-            for agent in self.agents:
+            # Bestimme Reihenfolge: bei Pro/Contra abwechselnd, sonst zufällig
+            if is_pro_contra:
+                # Pro und Contra abwechselnd
+                pro_list = [a for a in self.agents if a.name in pro_names]
+                contra_list = [a for a in self.agents if a.name in contra_names]
+                # Mischen für Abwechslung
+                random.shuffle(pro_list)
+                random.shuffle(contra_list)
+                agents_in_order = []
+                max_len = max(len(pro_list), len(contra_list))
+                for i in range(max_len):
+                    if i < len(pro_list):
+                        agents_in_order.append(pro_list[i])
+                    if i < len(contra_list):
+                        agents_in_order.append(contra_list[i])
+            else:
+                agents_in_order = self.agents.copy()
+                random.shuffle(agents_in_order)
+            
+            for agent in agents_in_order:
                 if self.stop_event.is_set():
                     break
                 
                 if agent.ausgeschlossen:
                     continue
                 
-                if use_moderator and self.moderator:
+                # Team-Tag für Log und Prompt
+                team_tag = ""
+                team_name = None
+                if is_pro_contra:
+                    if agent.name in pro_names:
+                        team_tag = "[PRO] "
+                        team_name = "pro"
+                    elif agent.name in contra_names:
+                        team_tag = "[CONTRA] "
+                        team_name = "contra"
+                
+                # Moderator-Frage
+                if use_moderator and self.moderator and self.moderator.enabled:
                     if agent.name in self.moderator.abgebrochene_agenten:
                         continue
                     
@@ -495,45 +584,41 @@ class Simulation:
                         yield ("moderator", f"🎭 An {agent.name}: {question}")
                         self.discussion_log.append(f"Moderator an {agent.name}: {question}")
                         self._limit_discussion_log()
-                        
-                        answer = self._get_answer(agent, topic, document, round_num)
-                        
-                        if answer and answer not in ["[ABGEBROCHEN]", "[AUSGESCHLOSSEN]"]:
-                            self.stats["total_contributions"] += 1
-                            self.db.add_contribution(
-                                self.current_discussion_id, agent.agent_id, answer,
-                                round_num, False, None, None
-                            )
-                            yield ("agent", agent.name, answer, agent.color)
-                            self.discussion_log.append(f"{agent.name}: {answer}")
-                            self._limit_discussion_log()
-                            yield ("agent_update", agent.name, answer)
-                            yield ("contribution_added", 1)
-                            
-                            for other in self.agents:
-                                if other.name != agent.name and not other.ausgeschlossen and not self.stop_event.is_set():
-                                    self._learn_async(other, agent.name, answer, topic, agent.role)
                 
-                else:
-                    answer = self._get_answer(agent, topic, document, round_num)
+                # Agent-Antwort
+                answer = self._get_answer(agent, topic, document, round_num, team_name)
+                
+                if answer and answer not in ["[ABGEBROCHEN]", "[AUSGESCHLOSSEN]"]:
+                    self.stats["total_contributions"] += 1
+                    doc_citations_count = len(agent.citations_in_current_response)
+                    ext_citations_count = len(agent.external_citations_in_current_response)
+                    self.stats["citations_total"] += doc_citations_count
+                    self.stats["external_citations_total"] += ext_citations_count
                     
-                    if answer and answer not in ["[ABGEBROCHEN]", "[AUSGESCHLOSSEN]"]:
-                        self.stats["total_contributions"] += 1
-                        self.db.add_contribution(
-                            self.current_discussion_id, agent.agent_id, answer,
-                            round_num, False, None, None
-                        )
-                        yield ("agent", agent.name, answer, agent.color)
-                        self.discussion_log.append(f"{agent.name}: {answer}")
-                        self._limit_discussion_log()
-                        yield ("agent_update", agent.name, answer)
-                        yield ("contribution_added", 1)
-                        
-                        for other in self.agents:
-                            if other.name != agent.name and not other.ausgeschlossen and not self.stop_event.is_set():
-                                self._learn_async(other, agent.name, answer, topic, agent.role)
+                    self.db.add_contribution(
+                        self.current_discussion_id, agent.agent_id, answer,
+                        round_num, False, None, None,
+                        {
+                            "citations": doc_citations_count,
+                            "external_citations": ext_citations_count,
+                            "projects": projects
+                        }
+                    )
+                    
+                    # Log mit Team-Tag
+                    log_entry = f"{team_tag}{agent.name}: {answer}"
+                    self.discussion_log.append(log_entry)
+                    self._limit_discussion_log()
+                    
+                    yield ("agent", agent.name, answer, agent.color, team_name)
+                    yield ("agent_update", agent.name, answer)
+                    yield ("contribution_added", 1)
+                    
+                    # FIX: Thread-Pool für lernen (statt unkontrollierte Thread-Flut)
+                    self._schedule_learning(agent, answer, topic, round_num)
         
-        if not self.stop_event.is_set() and use_moderator and self.moderator:
+        # Zusammenfassung
+        if not self.stop_event.is_set() and use_moderator and self.moderator and self.moderator.enabled:
             summary = self.moderator.summarize(
                 "\n".join(self.discussion_log[-10:]), topic, self.lm, self.stop_event
             )
@@ -541,49 +626,220 @@ class Simulation:
                 yield ("moderator", f"🎭 📋 {summary}")
                 self.db.end_discussion(self.current_discussion_id, summary)
     
-    def _get_answer(self, agent, topic, document, round_num):
-        result_queue = queue.Queue()
+    def _schedule_learning(self, agent: Agent, answer: str, topic: str, round_num: int):
+        """Plant Lern-Jobs im Thread-Pool"""
+        # Begrenze Anzahl der Lern-Jobs: nur 3 zufällige andere Agenten
+        other_agents = [a for a in self.agents if a.name != agent.name and not a.ausgeschlossen]
+        if not other_agents:
+            return
         
-        def _ask():
-            try:
-                answer = agent.answer(topic, document, self.lm, self.stop_event, round_num)
-                result_queue.put(answer)
-            except Exception as e:
-                result_queue.put(f"[Fehler: {str(e)[:30]}]")
+        # Maximal 3 zufällige Agenten zum Lernen auswählen
+        max_learners = min(3, len(other_agents))
+        learners = random.sample(other_agents, max_learners)
         
-        thread = threading.Thread(target=_ask)
-        thread.daemon = True
-        thread.start()
-        thread.join(timeout=Config.TIMEOUT)
+        for other in learners:
+            future = self._learn_executor.submit(
+                self._learn_single, other, agent.name, answer, topic, agent.role
+            )
+            self._learn_futures.append(future)
         
-        if thread.is_alive():
-            return "[Timeout]"
-        
+        # Cleanup alte Futures
+        self._learn_futures = [f for f in self._learn_futures if not f.done()]
+    
+    def _learn_single(self, agent: Agent, other_name: str, statement: str, topic: str, other_role: str):
+        """Einzelner Lern-Job"""
         try:
-            return result_queue.get_nowait()
-        except queue.Empty:
-            return "[Fehler]"
+            agent.learn_from(other_name, statement, topic, self.lm, other_role)
+        except Exception as e:
+            print(f"⚠️ Lern-Fehler bei {agent.name}: {e}")
+    
+    def start_debate(self, topic: str, document: Optional[str], config: Dict) -> Generator:
+        """Startet eine Debatte mit dem gewählten Format"""
+        self.stop_event.clear()
+        self.is_running = True
+        self.discussion_log = []
+        self.current_topic = topic
+        self.current_debate_format = config.get("format", "classic")
+        self.debate_settings = config
+        self.team_mode = config.get("format") == "pro_contra"
+        
+        projects = config.get("projects", [])
+        retrieval_k = config.get("retrieval_k", 5)
+        if projects:
+            self.set_active_projects(projects, retrieval_k)
+        
+        print(f"🎭 Starte Debatte: Format={self.current_debate_format}, Thema={topic}")
+        print(f"   Projekte: {projects}")
+        print(f"   Moderator aktiv: {config.get('use_moderator', False)}")
+        
+        for agent in self.agents:
+            agent.schon_gesagtes = []
+            agent.wiederholungen = 0
+            agent.ausgeschlossen = False
+            agent.discussion_log = self.discussion_log
+            agent.missing_citations_this_round = 0
+        
+        if self.moderator:
+            self.moderator.enabled = config.get("use_moderator", True)
+            self.moderator.evasions = {}
+            self.moderator.abgebrochene_agenten = set()
+        
+        self.current_discussion_id = f"debate_{int(time.time())}"
+        
+        # Setze Diskussions-Ziel aus Prämisse
+        premise = config.get("premise", "")
+        prove_mode = config.get("prove_mode", True)
+        if premise:
+            self.set_discussion_purpose(f"Prämisse prüfen: {premise}", 
+                                        f"Die These '{premise}' {'beweisen' if prove_mode else 'widerlegen'}")
+        
+        self.db.start_discussion(
+            self.current_discussion_id, topic,
+            f"Debatte ({self.current_debate_format})",
+            self.discussion_goal or premise,
+            self.moderator.name if self.moderator else None,
+            {"projects": projects, "format": self.current_debate_format}
+        )
+        
+        # Moderator-Einführung
+        use_moderator = config.get("use_moderator", True) and self.moderator is not None
+        if use_moderator and self.moderator:
+            intro = self.moderator.introduce(topic, document, self.lm, self.stop_event)
+            if intro and intro != "[ABGEBROCHEN]":
+                yield ("moderator", f"🎭 {intro}")
+                self.discussion_log.append(f"Moderator: {intro}")
+        
+        # Verwende DebateSession für komplexe Formate, sonst eigene Loop
+        format_id = config.get("format", "classic")
+        if format_id in ["fishbowl", "world_cafe", "delphi"]:
+            # Nutze DebateSession für spezielle Formate
+            debate_config = DebateConfig(
+                format=format_id,
+                rounds=config.get("rounds", 3),
+                time_per_round=config.get("time_per_round", 0),
+                thinking_time=config.get("thinking_time", 10),
+                enable_moderator=use_moderator,
+                enable_voting=config.get("enable_voting", False),
+                enable_sanctions=config.get("enable_sanctions", False),
+                inner_circle_size=config.get("inner_circle_size", 5),
+                cafe_tables=config.get("cafe_tables", 3),
+                rotation_rounds=config.get("rotation_rounds", 3),
+                delphi_rounds=config.get("rounds", 3),
+                anonymous_votes=config.get("anonymous_votes", True),
+                show_statistics=config.get("show_statistics", True),
+                premise=premise,
+                prove_mode=prove_mode
+            )
+            
+            # Team-Zuordnung für Pro/Contra bei premise_check
+            if format_id == "premise_check":
+                debate_config.pro_agents = config.get("pro_agents", [])
+                debate_config.contra_agents = config.get("contra_agents", [])
+            
+            self.debate_session = DebateSession(topic, debate_config, self.agents, self.lm, self.db)
+            for msg in self.debate_session.start():
+                if msg[0] == "agent" and len(msg) > 4 and msg[4]:
+                    # Team-Tag in Nachricht einbauen
+                    team = msg[4]
+                    team_tag = f"[{team.upper()}] "
+                    msg_list = list(msg)
+                    msg_list[2] = f"{team_tag}{msg[2]}"
+                    msg = tuple(msg_list)
+                yield msg
+        else:
+            # Eigene Loop für classic und pro_contra
+            use_moderator = config.get("use_moderator", True) and self.moderator is not None
+            projects = config.get("projects", [])
+            pro_agents = config.get("pro_agents", [])
+            contra_agents = config.get("contra_agents", [])
+            
+            for msg in self._run_debate_loop(topic, document, config, use_moderator, 
+                                              projects, pro_agents, contra_agents):
+                yield msg
+        
+        # Aufräumen
+        if not self.stop_event.is_set() and use_moderator and self.moderator:
+            summary = self.moderator.summarize(
+                "\n".join(self.discussion_log[-10:]), topic, self.lm, self.stop_event
+            )
+            if summary and summary != "[ABGEBROCHEN]":
+                yield ("moderator", f"🎭 📋 {summary}")
+                self.db.end_discussion(self.current_discussion_id, summary)
+        else:
+            self.db.end_discussion(self.current_discussion_id, "Diskussion beendet")
+        
+        self._cleanup_duplicate_memories()
+        self.is_running = False
+        self.stop_event.clear()
+        
+        # Thread-Pool aufräumen
+        for future in self._learn_futures:
+            future.cancel()
+        self._learn_futures.clear()
+    
+    def _get_answer(self, agent, topic, document, round_num, team=None) -> str:
+        """Holt Antwort von Agent mit Timeout"""
+        max_retries = 3
+        retry_delay = 2.0
+        
+        # Team-Information für Prompt
+        topic_with_team = topic
+        if team:
+            topic_with_team = f"[TEAM {team.upper()}] {topic}"
+        
+        for attempt in range(max_retries):
+            result_queue = queue.Queue()
+            
+            def _ask():
+                try:
+                    answer = agent.answer(topic_with_team, document, self.lm, self.stop_event, round_num)
+                    result_queue.put(answer)
+                except Exception as e:
+                    result_queue.put(f"[Fehler: {str(e)[:30]}]")
+            
+            thread = threading.Thread(target=_ask)
+            thread.daemon = True
+            thread.start()
+            thread.join(timeout=Config.TIMEOUT)
+            
+            if thread.is_alive():
+                print(f"⚠️ Timeout bei {agent.name} (Versuch {attempt+1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    continue
+                return "[Timeout]"
+            
+            try:
+                result = result_queue.get_nowait()
+                if result.startswith("[Fehler") and attempt < max_retries - 1:
+                    print(f"⚠️ Fehler bei {agent.name}: {result}, Retry {attempt+1}")
+                    self.stats["api_retries"] += 1
+                    time.sleep(retry_delay)
+                    continue
+                return result
+            except queue.Empty:
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    continue
+                return "[Fehler]"
+        
+        return "[Fehler: Max Retries]"
     
     def _learn_async(self, agent, other_name, statement, topic, other_role):
-        def _learn():
-            try:
-                agent.learn_from(other_name, statement, topic, self.lm, other_role)
-            except:
-                pass
-        thread = threading.Thread(target=_learn)
-        thread.daemon = True
-        thread.start()
+        """Legacy - wird durch _schedule_learning ersetzt"""
+        pass
     
     def _cleanup_duplicate_memories(self):
         try:
             conn = self.db._get_connection()
             cursor = conn.cursor()
+            # Verbesserte Query mit Hashing für bessere Performance
             cursor.execute("""
                 DELETE FROM memory_crystals 
                 WHERE crystal_id NOT IN (
                     SELECT MIN(crystal_id) 
                     FROM memory_crystals 
-                    GROUP BY fact
+                    GROUP BY substr(fact, 1, 500)
                 )
             """)
             deleted = cursor.rowcount
@@ -598,322 +854,17 @@ class Simulation:
         if len(self.discussion_log) > Config.MAX_DISCUSSION_LOG:
             self.discussion_log = self.discussion_log[-Config.MAX_DISCUSSION_LOG:]
     
-    # ==================== DEBATTEN-FORMATE ====================
-    
-    def start_debate(self, topic: str, document: Optional[str], config: Dict) -> Generator:
-        """
-        Startet eine Debatte mit erweiterten Formaten.
-        FIX: Moderator wird im "classic" Format verwendet.
-        """
-        self.stop_event.clear()
-        self.is_running = True
-        self.discussion_log = []
-        self.current_topic = topic
-        self.current_debate_format = config.get("format", "classic")
-        
-        # Debug-Ausgabe
-        print(f"🎭 Starte Debatte: Format={self.current_debate_format}, Thema={topic}")
-        print(f"   Pro-Agenten aus config: {config.get('pro_agents', [])}")
-        print(f"   Contra-Agenten aus config: {config.get('contra_agents', [])}")
-        print(f"   Moderator aktiv: {config.get('use_moderator', False)}")
-        print(f"   Moderator vorhanden: {self.moderator is not None}")
-        
-        # Agenten zurücksetzen
-        for agent in self.agents:
-            agent.schon_gesagtes = []
-            agent.wiederholungen = 0
-            agent.ausgeschlossen = False
-            agent.discussion_log = self.discussion_log
-        
-        # Moderator zurücksetzen
-        if self.moderator:
-            self.moderator.enabled = config.get("use_moderator", True)
-            self.moderator.evasions = {}
-            self.moderator.abgebrochene_agenten = set()
-        
-        # Diskussion in DB starten
-        self.current_discussion_id = f"debate_{int(time.time())}"
-        self.db.start_discussion(
-            self.current_discussion_id, topic,
-            f"Debatte ({self.current_debate_format})",
-            config.get("premise", None),
-            self.moderator.name if self.moderator else None
-        )
-        
-        # FÜR CLASSIC: Verwende die klassische Diskussionslogik mit Moderator
-        if self.current_debate_format == "classic":
-            rounds = config.get("rounds", 3)
-            use_moderator = config.get("use_moderator", True) and self.moderator is not None
-            
-            # Moderator-Vorstellung
-            if use_moderator and self.moderator:
-                intro = self.moderator.introduce(topic, document, self.lm, self.stop_event)
-                if intro and intro != "[ABGEBROCHEN]":
-                    yield ("moderator", f"🎭 {intro}")
-                    self.discussion_log.append(f"Moderator: {intro}")
-            
-            # Führe klassische Diskussion durch
-            for round_num in range(rounds):
-                if self.stop_event.is_set():
-                    break
-                
-                self.current_round = round_num + 1
-                yield ("system", f"--- RUNDE {round_num+1}/{rounds} ---")
-                yield ("round_update", f"Runde {round_num+1}/{rounds}")
-                
-                for agent in self.agents:
-                    if self.stop_event.is_set():
-                        break
-                    
-                    if agent.ausgeschlossen:
-                        continue
-                    
-                    if use_moderator and self.moderator:
-                        if agent.name in self.moderator.abgebrochene_agenten:
-                            continue
-                        
-                        context = "\n".join(self.discussion_log[-5:]) if self.discussion_log else ""
-                        question = self.moderator.ask_question(
-                            agent.name, agent.role, agent.personality,
-                            topic, document, context, self.lm, self.stop_event
-                        )
-                        
-                        if question and question != "[ABGEBROCHEN]":
-                            yield ("moderator", f"🎭 An {agent.name}: {question}")
-                            self.discussion_log.append(f"Moderator an {agent.name}: {question}")
-                            self._limit_discussion_log()
-                            
-                            answer = self._get_answer(agent, topic, document, round_num)
-                            
-                            if answer and answer not in ["[ABGEBROCHEN]", "[AUSGESCHLOSSEN]"]:
-                                self.stats["total_contributions"] += 1
-                                self.db.add_contribution(
-                                    self.current_discussion_id, agent.agent_id, answer,
-                                    round_num, False, None, None
-                                )
-                                yield ("agent", agent.name, answer, agent.color)
-                                self.discussion_log.append(f"{agent.name}: {answer}")
-                                self._limit_discussion_log()
-                                yield ("agent_update", agent.name, answer)
-                                yield ("contribution_added", 1)
-                                
-                                for other in self.agents:
-                                    if other.name != agent.name and not other.ausgeschlossen and not self.stop_event.is_set():
-                                        self._learn_async(other, agent.name, answer, topic, agent.role)
-                    
-                    else:
-                        answer = self._get_answer(agent, topic, document, round_num)
-                        
-                        if answer and answer not in ["[ABGEBROCHEN]", "[AUSGESCHLOSSEN]"]:
-                            self.stats["total_contributions"] += 1
-                            self.db.add_contribution(
-                                self.current_discussion_id, agent.agent_id, answer,
-                                round_num, False, None, None
-                            )
-                            yield ("agent", agent.name, answer, agent.color)
-                            self.discussion_log.append(f"{agent.name}: {answer}")
-                            self._limit_discussion_log()
-                            yield ("agent_update", agent.name, answer)
-                            yield ("contribution_added", 1)
-                            
-                            for other in self.agents:
-                                if other.name != agent.name and not other.ausgeschlossen and not self.stop_event.is_set():
-                                    self._learn_async(other, agent.name, answer, topic, agent.role)
-            
-            # Abschluss-Zusammenfassung durch Moderator
-            if not self.stop_event.is_set() and use_moderator and self.moderator:
-                summary = self.moderator.summarize(
-                    "\n".join(self.discussion_log[-10:]), topic, self.lm, self.stop_event
-                )
-                if summary and summary != "[ABGEBROCHEN]":
-                    yield ("moderator", f"🎭 📋 {summary}")
-                    self.db.end_discussion(self.current_discussion_id, summary)
-            else:
-                self.db.end_discussion(self.current_discussion_id, "Diskussion beendet")
-            
-            self.is_running = False
-            self.stop_event.clear()
-            return
-        
-        # Für alle anderen Formate: Verwende DebateSession
-        format_map = {
-            "classic": "classic",
-            "pro_contra": "pro_contra",
-            "fishbowl": "fishbowl",
-            "world_cafe": "world_cafe",
-            "delphi": "delphi",
-            "premise_check": "premise_check"
-        }
-        
-        format_str = format_map.get(config.get("format", "classic"), "classic")
-        
-        # FIX: Stelle sicher, dass pro_agents und contra_agents korrekt übernommen werden
-        pro_agents = config.get("pro_agents", [])
-        contra_agents = config.get("contra_agents", [])
-        
-        # FIX: Entferne mögliche Duplikate und leere Einträge
-        pro_agents = [a for a in pro_agents if a and a.strip()]
-        contra_agents = [a for a in contra_agents if a and a.strip()]
-        
-        print(f"   Bereinigte Pro-Agenten: {pro_agents}")
-        print(f"   Bereinigte Contra-Agenten: {contra_agents}")
-        
-        # FIX: Wenn keine Teams zugewiesen sind, aber Agenten vorhanden sind, verteile zufällig
-        if not pro_agents and not contra_agents and self.agents:
-            print("⚠️ Keine Team-Zuordnung in config, verteile zufällig...")
-            shuffled = self.agents.copy()
-            random.shuffle(shuffled)
-            half = len(shuffled) // 2
-            pro_agents = [a.name for a in shuffled[:half]]
-            contra_agents = [a.name for a in shuffled[half:]]
-            print(f"   Zufällige Pro-Agenten: {pro_agents}")
-            print(f"   Zufällige Contra-Agenten: {contra_agents}")
-        
-        # Für Prämisse prüfen: Kombiniere Dokument + Prämisse
-        premise = config.get("premise", topic)
-        if format_str == "premise_check" and document:
-            combined_premise = f"""Dokument:
-{document[:2000]}
-
-Prämisse/These:
-{premise}
-
-Aufgabe: {'Beweise' if config.get('prove_mode', True) else 'Widerlege'} die These basierend auf dem Dokument."""
-            premise = combined_premise
-        
-        # FIX: Stelle sicher, dass topic korrekt gesetzt wird
-        debate_topic = topic
-        if format_str == "premise_check":
-            debate_topic = premise
-        
-        # Debatten-Konfiguration
-        debate_config = DebateConfig(
-            format=format_str,
-            rounds=config.get("rounds", 3),
-            time_per_round=config.get("time_per_round", 0),
-            thinking_time=config.get("thinking_time", 10),
-            enable_moderator=config.get("enable_moderator", False),
-            enable_voting=config.get("enable_voting", False),
-            enable_sanctions=config.get("enable_sanctions", False),
-            pro_agents=pro_agents,
-            contra_agents=contra_agents,
-            premise=premise,
-            prove_mode=config.get("prove_mode", True),
-            inner_circle_size=config.get("inner_circle_size", 5),
-            cafe_tables=config.get("cafe_tables", 3),
-            rotation_rounds=config.get("rotation_rounds", 3),
-            anonymous_votes=config.get("anonymous_votes", True),
-            show_statistics=config.get("show_statistics", True)
-        )
-        
-        print(f"   DebateConfig Pro-Agenten: {debate_config.pro_agents}")
-        print(f"   DebateConfig Contra-Agenten: {debate_config.contra_agents}")
-        
-        # Debatten-Session erstellen
-        self.debate_session = DebateSession(
-            debate_topic,
-            debate_config, 
-            self.agents, 
-            self.lm,
-            self.db
-        )
-        
-        # Controller für Steuerung (Timer, Rednerliste, Sanktionen)
-        self.debate_controller = DebateController(
-            self.agents,
-            config={
-                "time_per_round": config.get("time_per_round", 0),
-                "thinking_time": config.get("thinking_time", 10),
-                "speaker_list": config.get("speaker_list", False),
-                "interruptions": config.get("interruptions", False),
-                "sanctions": config.get("enable_sanctions", False),
-                "max_warnings": config.get("max_warnings", 3),
-                "mute_rounds": config.get("mute_rounds", 2),
-                "repetition_threshold": config.get("repetition_threshold", 2)
-            }
-        )
-        
-        # Für Lern-Aufrufe: letzte Beiträge speichern
-        last_contributions = []
-        
-        # Debatte ausführen
-        try:
-            for msg in self.debate_session.start():
-                # Nachrichten an GUI weiterleiten
-                if msg[0] == "agent":
-                    agent_name = msg[1]
-                    content = msg[2]
-                    color = msg[3]
-                    team = msg[4] if len(msg) > 4 else None
-                    
-                    # In DB speichern
-                    agent = next((a for a in self.agents if a.name == agent_name), None)
-                    if agent:
-                        self.db.add_contribution(
-                            self.current_discussion_id, agent.agent_id, content,
-                            self.debate_session.current_round, False, None, None
-                        )
-                        self.stats["total_contributions"] += 1
-                    
-                    # FÜR LERNEN: Andere Agenten lernen aus diesem Beitrag
-                    last_contributions.append({"agent": agent_name, "content": content, "round": self.debate_session.current_round})
-                    if len(last_contributions) > 10:
-                        last_contributions.pop(0)
-                    
-                    # Alle anderen Agenten lernen von diesem Beitrag
-                    for other_agent in self.agents:
-                        if other_agent.name != agent_name and not other_agent.ausgeschlossen and not self.stop_event.is_set():
-                            self._learn_async(other_agent, agent_name, content, topic, agent.role if agent else "")
-                    
-                    yield msg
-                    
-                elif msg[0] == "system":
-                    self.discussion_log.append(msg[1])
-                    yield msg
-                    
-                elif msg[0] == "round_start":
-                    # Extrahiere Runden-Nummer aus Nachricht
-                    if len(msg) > 1 and isinstance(msg[1], str):
-                        match = re.search(r'(\d+)', msg[1])
-                        if match:
-                            self.current_round = int(match.group(1))
-                    else:
-                        self.current_round += 1
-                    yield msg
-                    
-                elif msg[0] == "round_end":
-                    yield msg
-                    
-                else:
-                    yield msg
-                    
-        finally:
-            self._cleanup_duplicate_memories()
-            self.db.end_discussion(self.current_discussion_id, 
-                                   self.debate_session._generate_summary() if self.debate_session else "")
-        
-        self.is_running = False
-        self.stop_event.clear()
-    
-    # ==================== ANALYSE ====================
-    
     def run_analysis(self, job: AnalysisJob, progress_callback: Callable = None) -> AnalysisJob:
-        """Führt eine Analyse mit den Agenten durch"""
         return self.task_manager.run_analysis(job, progress_callback)
     
     def analyze_results(self, contributions: List[Dict] = None) -> Dict:
-        """
-        Analysiert die Ergebnisse einer Diskussion.
-        
-        Args:
-            contributions: Liste der Beiträge (optional, verwendet sonst self.discussion_log)
-        """
         if contributions is None:
-            # Aus discussion_log extrahieren
             contributions = []
             for line in self.discussion_log:
-                if ": " in line:
-                    parts = line.split(": ", 1)
+                # Entferne Team-Tags für Analyse
+                clean_line = re.sub(r'^\[(PRO|CONTRA)\] ', '', line)
+                if ": " in clean_line:
+                    parts = clean_line.split(": ", 1)
                     if len(parts) == 2:
                         contributions.append({
                             "agent": parts[0],
@@ -925,24 +876,44 @@ Aufgabe: {'Beweise' if config.get('prove_mode', True) else 'Widerlege'} die Thes
             contributions, self.agents, self.current_topic
         )
     
-    # ==================== DOKUMENTEN-LOADER ====================
-    
     def load_document(self, source: str, source_type: str = "auto") -> Dict:
-        """Lädt ein Dokument für die Diskussion"""
         return self.document_loader.load_document(source, source_type)
     
     def load_multiple_documents(self, sources: List[Dict]) -> Dict:
-        """Lädt mehrere Dokumente"""
         return self.document_loader.load_multiple(sources)
     
-    # ==================== VISUALISIERUNG ====================
+    def add_document_to_project(self, project_name: str, source: str, source_type: str = "auto") -> Dict:
+        return self.project_manager.add_document_to_project(project_name, source, source_type)
+    
+    def add_folder_to_project(self, project_name: str, folder_path: str) -> List[Dict]:
+        return self.project_manager.add_folder_to_project(project_name, folder_path)
+    
+    def create_project(self, name: str) -> Dict:
+        project = self.project_manager.create_project(name)
+        return project.metadata
+    
+    def get_project_context(self, query: str, projects: List[str] = None, k: int = 5) -> str:
+        return self.project_manager.get_context(query, projects, k)
+    
+    def search_projects(self, query: str, projects: List[str] = None, k: int = 5) -> List[Dict]:
+        return self.project_manager.search_projects(query, projects, k)
+    
+    def list_projects(self) -> List[Dict]:
+        return self.project_manager.list_projects()
+    
+    def get_citation_stats(self, agent_id: str = None) -> Dict:
+        return self.db.get_citation_stats(agent_id)
+    
+    def get_citation_leaderboard(self, limit: int = 10) -> List[Dict]:
+        return self.db.get_citation_leaderboard(limit)
+    
+    def get_external_citation_leaderboard(self, limit: int = 10) -> List[Dict]:
+        return self.db.get_external_citation_leaderboard(limit)
     
     def get_visualization(self):
-        """Gibt das Visualisierungsobjekt zurück"""
         return self.visualization
     
     def get_network_data(self) -> Tuple[List[Dict], List[Dict]]:
-        """Holt Daten für Netzwerk-Graph"""
         nodes = []
         edges = []
         
@@ -954,7 +925,6 @@ Aufgabe: {'Beweise' if config.get('prove_mode', True) else 'Widerlege'} die Thes
                 "size": 500 + agent.experience_points / 100
             })
         
-        # Einflüsse aus DB holen
         for agent in self.agents:
             influences = self.db.get_influences(agent.agent_id)
             for inf in influences.get("given", []):
@@ -966,8 +936,6 @@ Aufgabe: {'Beweise' if config.get('prove_mode', True) else 'Widerlege'} die Thes
         
         return nodes, edges
     
-    # ==================== DATENBANK ====================
-    
     def search_pool(self, query: str, limit: int = 100) -> List[Dict]:
         return self.agent_factory.search_pool(query, limit)
     
@@ -978,7 +946,24 @@ Aufgabe: {'Beweise' if config.get('prove_mode', True) else 'Widerlege'} die Thes
         return self.db.get_pool_stats()
     
     def get_db_info(self) -> Dict:
-        return self.db.get_stats()
+        try:
+            stats = self.db.get_stats()
+            stats["active_projects"] = len(self.active_projects)
+            stats["projects_list"] = self.active_projects
+            stats["api_retries"] = self.stats.get("api_retries", 0)
+            stats["citations_total"] = self.stats.get("citations_total", 0)
+            stats["external_citations_total"] = self.stats.get("external_citations_total", 0)
+            return stats
+        except Exception as e:
+            print(f"⚠️ get_db_info Fehler: {e}")
+            return {
+                "total_agents": 0, "active_agents": 0, "kg_nodes": 0, "kg_edges": 0,
+                "topics": 0, "teams": 0, "prognoses": 0, "discussions": 0,
+                "contributions": 0, "projects": 0, "project_documents": 0,
+                "project_chunks": 0, "citations": 0, "external_citations": 0,
+                "avg_fachwissen": 0, "avg_kommunikation": 0, "avg_analyse": 0,
+                "ranks": {}, "error": str(e)
+            }
     
     def backup_db(self) -> str:
         return self.db.backup()
@@ -987,6 +972,7 @@ Aufgabe: {'Beweise' if config.get('prove_mode', True) else 'Widerlege'} die Thes
         self.db.backup()
         self.db = SynthAgoraDB()
         self.knowledge_graph = KnowledgeGraph()
+        self.project_manager = ProjectManager()
         return True
     
     def stop(self):
@@ -995,3 +981,7 @@ Aufgabe: {'Beweise' if config.get('prove_mode', True) else 'Widerlege'} die Thes
         if self.debate_session:
             self.debate_session.stop()
         self.lm.cancel_all()
+        # Thread-Pool aufräumen
+        for future in self._learn_futures:
+            future.cancel()
+        self._learn_futures.clear()

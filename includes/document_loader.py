@@ -2,463 +2,327 @@
 # -*- coding: utf-8 -*-
 """
 Document Loader für SynthAgora
-- Unterstützt: URL (Webseiten), PDF, TXT, mehrere Dokumente
-- Extrahiert Text, Metadaten, Zusammenfassung
-- Caching für wiederholte Ladevorgänge
+- Lädt Dokumente aus Dateien, URLs, Ordnern
+- Extrahiert Text aus PDF, HTML, TXT, etc.
 """
 
 import os
 import re
 import hashlib
-import tempfile
 import requests
 from datetime import datetime
-from typing import List, Dict, Optional, Any, Tuple
-import threading
-import time
-
-try:
-    import PyPDF2
-except ImportError:
-    PyPDF2 = None
-
-try:
-    from bs4 import BeautifulSoup
-except ImportError:
-    BeautifulSoup = None
-
-from .config import Config
+from typing import Dict, List, Optional, Any
+from urllib.parse import urlparse
 
 
 class DocumentLoader:
-    """Lädt und verarbeitet Dokumente für Diskussionen"""
+    """Lädt und extrahiert Text aus verschiedenen Quellen"""
     
     def __init__(self):
-        self.cache = {}
-        self.cache_ttl = 3600  # 1 Stunde
-        self._lock = threading.Lock()
         self.session = requests.Session()
         self.session.headers.update({
-            "User-Agent": "SynthAgora/1.0 (Document Loader)"
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
-        
-        # Unterstützte Formate
-        self.supported_formats = {
-            ".txt": self._load_text,
-            ".pdf": self._load_pdf,
-            ".html": self._load_html,
-            ".htm": self._load_html,
-            ".md": self._load_text,
-            ".json": self._load_json
-        }
     
-    def load_document(self, source: str, source_type: str = "auto") -> Dict:
+    def load_document(self, source: str, source_type: str = "auto") -> Dict[str, Any]:
         """
-        Lädt ein Dokument von verschiedenen Quellen.
-        
-        Args:
-            source: URL, Dateipfad oder Text
-            source_type: "url", "file", "text", "auto"
-        
-        Returns:
-            {
-                "content": str,           # Volltext
-                "title": str,             # Titel/Name
-                "source": str,            # Original-Quelle
-                "type": str,              # url/file/text
-                "metadata": dict,         # Zusatzinfos
-                "summary": str,           # Kurze Zusammenfassung (optional)
-                "sections": list,         # Abschnitte (optional)
-                "loaded_at": str
-            }
+        Lädt ein Dokument.
+        source: Dateipfad oder URL
+        source_type: 'file', 'url', 'auto'
+        Returns: Dict mit title, content, source, loaded_at, hash
         """
-        # Cache prüfen
-        cache_key = hashlib.md5(f"{source}_{source_type}".encode()).hexdigest()
-        with self._lock:
-            if cache_key in self.cache:
-                cached_time, cached_data = self.cache[cache_key]
-                if (datetime.now() - cached_time).total_seconds() < self.cache_ttl:
-                    print(f"📦 Cache-Treffer: {source[:50]}...")
-                    return cached_data
-        
-        # Typ automatisch erkennen
         if source_type == "auto":
-            if source.startswith(("http://", "https://")):
+            if source.startswith(('http://', 'https://')):
                 source_type = "url"
-            elif os.path.isfile(source):
-                source_type = "file"
             else:
-                source_type = "text"
+                source_type = "file"
         
-        # Laden
         if source_type == "url":
-            result = self._load_url(source)
+            return self._load_url(source)
         elif source_type == "file":
-            result = self._load_file(source)
-        elif source_type == "text":
-            result = self._load_text_direct(source)
+            return self._load_file(source)
         else:
             raise ValueError(f"Unbekannter Quelltyp: {source_type}")
-        
-        # Cachen
-        with self._lock:
-            self.cache[cache_key] = (datetime.now(), result)
-        
-        return result
     
-    def load_multiple(self, sources: List[Dict]) -> Dict:
-        """
-        Lädt mehrere Dokumente und kombiniert sie.
-        
-        Args:
-            sources: Liste von {"source": str, "type": str, "weight": float}
-        
-        Returns:
-            Kombiniertes Dokument mit Quellen-Angaben
-        """
-        documents = []
-        total_weight = 0
-        
-        for src in sources:
-            try:
-                doc = self.load_document(src["source"], src.get("type", "auto"))
-                weight = src.get("weight", 1.0)
-                doc["weight"] = weight
-                documents.append(doc)
-                total_weight += weight
-            except Exception as e:
-                print(f"⚠️ Fehler beim Laden {src.get('source')}: {e}")
-        
-        if not documents:
-            return {
-                "content": "",
-                "title": "Keine Dokumente geladen",
-                "source": "multiple",
-                "type": "multiple",
-                "metadata": {"errors": True},
-                "sections": [],
-                "loaded_at": datetime.now().isoformat()
-            }
-        
-        # Kombinieren
-        combined_content = ""
-        combined_sections = []
-        
-        for doc in documents:
-            combined_content += f"\n\n--- {doc['title']} ---\n\n{doc['content']}"
-            combined_sections.append({
-                "title": doc['title'],
-                "content": doc['content'],
-                "source": doc['source'],
-                "weight": doc.get('weight', 1.0)
-            })
-        
-        return {
-            "content": combined_content.strip(),
-            "title": f"{len(documents)} Dokumente",
-            "source": "multiple",
-            "type": "multiple",
-            "metadata": {
-                "documents": documents,
-                "total_weight": total_weight,
-                "count": len(documents)
-            },
-            "sections": combined_sections,
-            "loaded_at": datetime.now().isoformat()
-        }
-    
-    def _load_url(self, url: str) -> Dict:
-        """Lädt eine URL und extrahiert Text"""
-        try:
-            response = self.session.get(url, timeout=15)
-            response.raise_for_status()
-            
-            content_type = response.headers.get("content-type", "")
-            
-            if "application/pdf" in content_type:
-                # PDF direkt laden
-                return self._load_pdf_from_bytes(response.content, url)
-            elif "text/html" in content_type:
-                return self._load_html_from_text(response.text, url)
-            else:
-                # Als Text behandeln
-                return self._load_text_direct(response.text, url)
-                
-        except requests.RequestException as e:
-            raise Exception(f"URL konnte nicht geladen werden: {e}")
-    
-    def _load_file(self, filepath: str) -> Dict:
-        """Lädt eine Datei basierend auf Erweiterung"""
+    def _load_file(self, filepath: str) -> Dict[str, Any]:
+        """Lädt eine Datei"""
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Datei nicht gefunden: {filepath}")
         
         ext = os.path.splitext(filepath)[1].lower()
         
-        if ext in self.supported_formats:
-            return self.supported_formats[ext](filepath)
+        if ext == '.txt':
+            content = self._load_text(filepath)
+        elif ext == '.pdf':
+            content = self._load_pdf(filepath)
+        elif ext in ['.html', '.htm']:
+            content = self._load_html_file(filepath)
+        elif ext == '.json':
+            content = self._load_json(filepath)
+        elif ext == '.csv':
+            content = self._load_csv(filepath)
+        elif ext == '.md':
+            content = self._load_text(filepath)
+        elif ext == '.xml':
+            content = self._load_text(filepath)
         else:
             # Fallback: als Text versuchen
-            return self._load_text(filepath)
-    
-    def _load_text(self, filepath: str) -> Dict:
-        """Lädt eine Textdatei"""
-        try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                content = f.read()
-        except UnicodeDecodeError:
-            with open(filepath, 'r', encoding='latin-1') as f:
-                content = f.read()
+            try:
+                content = self._load_text(filepath)
+            except:
+                content = f"[Kann Dateiformat {ext} nicht lesen]"
+        
+        # Hash berechnen
+        content_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
         
         return {
-            "content": content,
             "title": os.path.basename(filepath),
+            "content": content,
             "source": filepath,
-            "type": "file",
-            "metadata": {
-                "size": os.path.getsize(filepath),
-                "extension": os.path.splitext(filepath)[1]
-            },
-            "sections": self._split_sections(content),
-            "loaded_at": datetime.now().isoformat()
+            "source_type": "file",
+            "loaded_at": datetime.now().isoformat(),
+            "hash": content_hash,
+            "size": len(content),
+            "extension": ext
         }
     
-    def _load_pdf(self, filepath: str) -> Dict:
-        """Lädt eine PDF-Datei"""
-        if PyPDF2 is None:
-            raise ImportError("PyPDF2 nicht installiert. Bitte installieren: pip install PyPDF2")
-        
-        content = ""
-        metadata = {}
-        
-        with open(filepath, 'rb') as f:
-            reader = PyPDF2.PdfReader(f)
-            metadata = {
-                "pages": len(reader.pages),
-                "author": reader.metadata.get("/Author", "") if reader.metadata else "",
-                "title": reader.metadata.get("/Title", "") if reader.metadata else ""
+    def _load_url(self, url: str) -> Dict[str, Any]:
+        """Lädt eine URL"""
+        try:
+            resp = self.session.get(url, timeout=30)
+            resp.raise_for_status()
+            
+            # Content-Type bestimmen
+            content_type = resp.headers.get('content-type', '').lower()
+            
+            if 'text/html' in content_type:
+                content = self._extract_html_text(resp.text)
+                title = self._extract_html_title(resp.text) or os.path.basename(urlparse(url).path) or urlparse(url).netloc
+            elif 'application/pdf' in content_type:
+                # PDF von URL speichern und laden
+                import tempfile
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as f:
+                    f.write(resp.content)
+                    content = self._load_pdf(f.name)
+                os.unlink(f.name)
+                title = os.path.basename(urlparse(url).path) or "PDF Dokument"
+            elif 'text/plain' in content_type:
+                content = resp.text
+                title = os.path.basename(urlparse(url).path) or "Text Dokument"
+            elif 'application/json' in content_type:
+                content = resp.text
+                title = os.path.basename(urlparse(url).path) or "JSON Dokument"
+            else:
+                content = resp.text[:100000]
+                title = os.path.basename(urlparse(url).path) or "Dokument"
+            
+            # Hash berechnen
+            content_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
+            
+            return {
+                "title": title,
+                "content": content,
+                "source": url,
+                "source_type": "url",
+                "loaded_at": datetime.now().isoformat(),
+                "hash": content_hash,
+                "size": len(content),
+                "content_type": content_type
             }
             
-            for page in reader.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    content += page_text + "\n\n"
-        
-        title = metadata.get("title") or os.path.basename(filepath)
-        
-        return {
-            "content": content.strip(),
-            "title": title,
-            "source": filepath,
-            "type": "pdf",
-            "metadata": metadata,
-            "sections": self._split_sections(content),
-            "loaded_at": datetime.now().isoformat()
-        }
+        except requests.exceptions.Timeout:
+            raise Exception(f"Zeitüberschreitung beim Laden von: {url}")
+        except requests.exceptions.RequestException as e:
+            raise Exception(f"Netzwerkfehler: {e}")
+        except Exception as e:
+            raise Exception(f"URL konnte nicht geladen werden: {e}")
     
-    def _load_pdf_from_bytes(self, data: bytes, source: str) -> Dict:
-        """Lädt PDF aus Bytes (z.B. von URL)"""
-        if PyPDF2 is None:
-            raise ImportError("PyPDF2 nicht installiert")
-        
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp.write(data)
-            tmp_path = tmp.name
-        
+    def _load_text(self, filepath: str) -> str:
+        """Lädt reine Textdatei"""
         try:
-            result = self._load_pdf(tmp_path)
-            result["source"] = source
-            result["type"] = "url_pdf"
-            return result
-        finally:
-            os.unlink(tmp_path)
-    
-    def _load_html(self, filepath: str) -> Dict:
-        """Lädt eine HTML-Datei"""
-        with open(filepath, 'r', encoding='utf-8') as f:
-            html = f.read()
-        return self._load_html_from_text(html, filepath)
-    
-    def _load_html_from_text(self, html: str, source: str) -> Dict:
-        """Extrahiert Text aus HTML"""
-        if BeautifulSoup is None:
-            raise ImportError("BeautifulSoup4 nicht installiert. Bitte installieren: pip install beautifulsoup4")
-        
-        soup = BeautifulSoup(html, 'html.parser')
-        
-        # Titel extrahieren
-        title_tag = soup.find('title')
-        title = title_tag.string.strip() if title_tag and title_tag.string else source
-        
-        # Hauptinhalt extrahieren
-        for script in soup(["script", "style", "nav", "footer", "header"]):
-            script.decompose()
-        
-        content = soup.get_text()
-        content = re.sub(r'\n\s*\n', '\n\n', content).strip()
-        
-        return {
-            "content": content,
-            "title": title,
-            "source": source,
-            "type": "html",
-            "metadata": {"url": source},
-            "sections": self._split_sections(content),
-            "loaded_at": datetime.now().isoformat()
-        }
-    
-    def _load_json(self, filepath: str) -> Dict:
-        """Lädt eine JSON-Datei (z.B. vorbereitete Diskussionsgrundlage)"""
-        import json
-        with open(filepath, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        content = ""
-        if isinstance(data, dict):
-            # Versuche, relevanten Text zu extrahieren
-            if "content" in data:
-                content = data["content"]
-            elif "text" in data:
-                content = data["text"]
-            elif "body" in data:
-                content = data["body"]
-            else:
-                content = json.dumps(data, indent=2, ensure_ascii=False)
-        else:
-            content = str(data)
-        
-        return {
-            "content": content,
-            "title": data.get("title", os.path.basename(filepath)) if isinstance(data, dict) else os.path.basename(filepath),
-            "source": filepath,
-            "type": "json",
-            "metadata": data if isinstance(data, dict) else {},
-            "sections": self._split_sections(content),
-            "loaded_at": datetime.now().isoformat()
-        }
-    
-    def _load_text_direct(self, text: str, source: str = "text_input") -> Dict:
-        """Lädt direkt eingegebenen Text"""
-        return {
-            "content": text,
-            "title": "Direkte Texteingabe",
-            "source": source,
-            "type": "text",
-            "metadata": {"length": len(text)},
-            "sections": self._split_sections(text),
-            "loaded_at": datetime.now().isoformat()
-        }
-    
-    def _split_sections(self, text: str) -> List[Dict]:
-        """
-        Teilt Text in Abschnitte (für strukturierte Diskussion)
-        """
-        sections = []
-        
-        # Nach Überschriften suchen (Markdown oder Nummerierung)
-        lines = text.split('\n')
-        current_section = {"title": "Einleitung", "content": []}
-        
-        for line in lines:
-            # Prüfe auf Überschrift
-            if line.startswith('#'):
-                if current_section["content"]:
-                    current_section["content"] = '\n'.join(current_section["content"])
-                    sections.append(current_section)
-                current_section = {"title": line.lstrip('#').strip(), "content": []}
-            elif re.match(r'^\d+\.', line):
-                if current_section["content"]:
-                    current_section["content"] = '\n'.join(current_section["content"])
-                    sections.append(current_section)
-                current_section = {"title": line.strip(), "content": []}
-            else:
-                current_section["content"].append(line)
-        
-        # Letzte Section speichern
-        if current_section["content"]:
-            current_section["content"] = '\n'.join(current_section["content"])
-            sections.append(current_section)
-        
-        return sections if len(sections) > 1 else []
-    
-    def generate_summary(self, document: Dict, lm_client=None) -> str:
-        """
-        Generiert eine Zusammenfassung des Dokuments (optional mit LLM)
-        """
-        content = document["content"]
-        
-        if lm_client and len(content) > 200:
-            prompt = f"""Fasse folgenden Text in 2-3 Sätzen zusammen. Sei präzise und objektiv:
-
-{content[:2000]}"""
+            with open(filepath, 'r', encoding='utf-8') as f:
+                return f.read()
+        except UnicodeDecodeError:
             try:
-                summary = lm_client.ask(prompt, "Dokument-Zusammenfassung", max_tokens=100)
-                document["summary"] = summary
-                return summary
+                with open(filepath, 'r', encoding='latin-1') as f:
+                    return f.read()
             except:
-                pass
-        
-        # Fallback: erste 300 Zeichen
-        summary = content[:300] + "..." if len(content) > 300 else content
-        document["summary"] = summary
-        return summary
+                with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                    return f.read()
     
-    def clear_cache(self):
-        """Leert den Cache"""
-        with self._lock:
-            self.cache.clear()
-        print("🧹 DocumentLoader-Cache geleert")
+    def _load_pdf(self, filepath: str) -> str:
+        """Extrahiert Text aus PDF"""
+        try:
+            import PyPDF2
+            text_parts = []
+            with open(filepath, 'rb') as f:
+                reader = PyPDF2.PdfReader(f)
+                for page_num, page in enumerate(reader.pages):
+                    try:
+                        page_text = page.extract_text()
+                        if page_text:
+                            text_parts.append(f"[Seite {page_num + 1}]\n{page_text}")
+                    except Exception as e:
+                        text_parts.append(f"[Seite {page_num + 1}: Fehler bei Extraktion - {e}]")
+            return "\n\n".join(text_parts)
+        except ImportError:
+            return "[PyPDF2 nicht installiert. Bitte ausführen: pip install PyPDF2]"
+        except Exception as e:
+            return f"[PDF-Fehler: {e}]"
     
-    def get_stats(self) -> Dict:
-        """Gibt Cache-Statistiken zurück"""
-        with self._lock:
-            return {
-                "cache_size": len(self.cache),
-                "supported_formats": list(self.supported_formats.keys())
-            }
-
-
-# ==================== HILFSKLASSEN ====================
-
-class DocumentCache:
-    """Einfacher Cache für häufig verwendete Dokumente"""
+    def _load_html_file(self, filepath: str) -> str:
+        """Extrahiert Text aus HTML-Datei"""
+        try:
+            from bs4 import BeautifulSoup
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                soup = BeautifulSoup(f.read(), 'html.parser')
+                # Entferne Script und Style
+                for script in soup(["script", "style", "nav", "footer", "header"]):
+                    script.decompose()
+                text = soup.get_text()
+                # Clean up
+                lines = [line.strip() for line in text.splitlines() if line.strip()]
+                return "\n".join(lines)
+        except ImportError:
+            # Fallback: einfaches Regex
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+                content = re.sub(r'<[^>]+>', ' ', content)
+                content = re.sub(r'\s+', ' ', content)
+                return content.strip()
+        except Exception as e:
+            return f"[HTML-Fehler: {e}]"
     
-    def __init__(self, max_size=50):
-        self.cache = {}
-        self.max_size = max_size
-        self._lock = threading.Lock()
+    def _load_json(self, filepath: str) -> str:
+        """Lädt JSON-Datei"""
+        try:
+            import json
+            with open(filepath, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return json.dumps(data, indent=2, ensure_ascii=False)
+        except Exception as e:
+            return f"[JSON-Fehler: {e}]"
     
-    def get(self, key: str) -> Optional[Dict]:
-        with self._lock:
-            if key in self.cache:
-                return self.cache[key]
+    def _load_csv(self, filepath: str) -> str:
+        """Lädt CSV-Datei"""
+        try:
+            import csv
+            rows = []
+            with open(filepath, 'r', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                for i, row in enumerate(reader):
+                    if i == 0:
+                        rows.append("Spalten: " + ", ".join(row))
+                    else:
+                        rows.append(", ".join(row))
+            return "\n".join(rows)
+        except Exception as e:
+            return f"[CSV-Fehler: {e}]"
+    
+    def _extract_html_text(self, html: str) -> str:
+        """Extrahiert Text aus HTML-String"""
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html, 'html.parser')
+            for script in soup(["script", "style", "nav", "footer", "header"]):
+                script.decompose()
+            text = soup.get_text()
+            # Clean up
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            return "\n".join(lines)
+        except ImportError:
+            # Fallback
+            text = re.sub(r'<[^>]+>', ' ', html)
+            text = re.sub(r'\s+', ' ', text)
+            return text.strip()
+    
+    def _extract_html_title(self, html: str) -> Optional[str]:
+        """Extrahiert Titel aus HTML"""
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html, 'html.parser')
+            title_tag = soup.find('title')
+            if title_tag:
+                return title_tag.get_text().strip()
+        except:
+            pass
         return None
     
-    def set(self, key: str, value: Dict):
-        with self._lock:
-            if len(self.cache) >= self.max_size:
-                # Entferne ältesten Eintrag
-                oldest = min(self.cache.keys(), key=lambda k: self.cache[k].get("_timestamp", 0))
-                del self.cache[oldest]
-            self.cache[key] = value
+    def load_multiple(self, sources: List[Dict]) -> Dict[str, Any]:
+        """
+        Lädt mehrere Dokumente.
+        sources: [{"source": "pfad", "type": "auto", "weight": 1.0}, ...]
+        """
+        documents = []
+        total_weight = 0
+        
+        for item in sources:
+            try:
+                doc = self.load_document(item["source"], item.get("type", "auto"))
+                doc["weight"] = item.get("weight", 1.0)
+                documents.append(doc)
+                total_weight += doc["weight"]
+            except Exception as e:
+                print(f"⚠️ Fehler bei {item['source']}: {e}")
+        
+        if not documents:
+            raise Exception("Keine Dokumente konnten geladen werden")
+        
+        # Kombinierter Inhalt
+        combined_content = ""
+        for doc in documents:
+            weight = doc["weight"]
+            combined_content += f"\n\n--- {doc['title']} (Gewicht: {weight}) ---\n"
+            combined_content += doc["content"]
+        
+        # Hash aus Kombination
+        combined_hash = hashlib.md5(combined_content.encode('utf-8')).hexdigest()
+        
+        return {
+            "title": f"Kombiniert ({len(documents)} Dokumente)",
+            "content": combined_content,
+            "source": "multiple",
+            "source_type": "multiple",
+            "loaded_at": datetime.now().isoformat(),
+            "hash": combined_hash,
+            "size": len(combined_content),
+            "documents": documents,
+            "total_weight": total_weight,
+            "document_count": len(documents)
+        }
     
-    def clear(self):
-        with self._lock:
-            self.cache.clear()
-
-
-# ==================== TEST ====================
-
-if __name__ == "__main__":
-    loader = DocumentLoader()
+    def load_folder(self, folder_path: str, recursive: bool = True) -> List[Dict[str, Any]]:
+        """
+        Lädt alle unterstützten Dateien aus einem Ordner.
+        """
+        supported_extensions = ['.txt', '.pdf', '.html', '.htm', '.json', '.csv', '.md', '.xml']
+        results = []
+        
+        if not os.path.exists(folder_path):
+            raise FileNotFoundError(f"Ordner nicht gefunden: {folder_path}")
+        
+        for root, dirs, files in os.walk(folder_path):
+            for file in files:
+                ext = os.path.splitext(file)[1].lower()
+                if ext in supported_extensions:
+                    filepath = os.path.join(root, file)
+                    try:
+                        doc = self.load_document(filepath, "file")
+                        results.append(doc)
+                        print(f"  ✅ {file}")
+                    except Exception as e:
+                        print(f"  ❌ {file}: {e}")
+            
+            if not recursive:
+                break
+        
+        return results
     
-    # Test: Text laden
-    doc = loader.load_document("Das ist ein Testdokument. Es enthält wichtige Informationen.", "text")
-    print(f"✅ Text geladen: {doc['title']} ({len(doc['content'])} Zeichen)")
+    def get_supported_extensions(self) -> List[str]:
+        """Gibt Liste der unterstützten Dateierweiterungen zurück"""
+        return ['.txt', '.pdf', '.html', '.htm', '.json', '.csv', '.md', '.xml']
     
-    # Test: Datei laden (falls vorhanden)
-    test_file = os.path.join(Config.EXAMPLES_FOLDER, "example.txt")
-    if os.path.exists(test_file):
-        doc = loader.load_document(test_file, "file")
-        print(f"✅ Datei geladen: {doc['title']} ({len(doc['content'])} Zeichen)")
-    
-    print(f"📊 Stats: {loader.get_stats()}")
+    def is_supported(self, filepath: str) -> bool:
+        """Prüft ob Datei unterstützt wird"""
+        ext = os.path.splitext(filepath)[1].lower()
+        return ext in self.get_supported_extensions()

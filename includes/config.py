@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Config-Modul für SynthAgora
+ERWEITERT: Embedding, Projekte, Zitier-Pflicht, Plugin-Kategorien
 """
 
 import os
@@ -42,6 +43,13 @@ class Config:
     MAX_TOKENS = 300
     TIMEOUT = 60
     
+    # ==================== EMBEDDING (NEU - SENTENCE TRANSFORMER) ====================
+    EMBEDDING_PROVIDER = "sentence_transformer"  # sentence_transformer, lmstudio, ollama, openai
+    EMBEDDING_MODEL = "all-MiniLM-L6-v2"  # all-MiniLM-L6-v2, paraphrase-multilingual-MiniLM-L12-v2, etc.
+    EMBEDDING_DIMENSION = 384  # all-MiniLM-L6-v2 hat 384 Dimensionen
+    EMBEDDING_BATCH_SIZE = 32
+    EMBEDDING_DEVICE = "cuda"  # cuda, cpu
+    
     # ==================== ORDNERSTRUKTUR ====================
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     
@@ -52,6 +60,21 @@ class Config:
     MEMORY_FOLDER = os.path.join(BASE_DIR, "memory")
     KNOWLEDGE_FOLDER = os.path.join(BASE_DIR, "knowledge")
     PLUGINS_FOLDER = os.path.join(BASE_DIR, "plugins")
+    
+    # ==================== PROJEKTE (NEU) ====================
+    PROJECTS_FOLDER = os.path.join(BASE_DIR, "projects")
+    
+    # ==================== CHUNKING (NEU) ====================
+    DEFAULT_CHUNK_SIZE = 1000
+    DEFAULT_CHUNK_OVERLAP = 200
+    
+    # ==================== PLUGIN-SYSTEM (NEU) ====================
+    PLUGIN_CATEGORIES = ["tasks", "synthesis", "export"]
+    
+    # ==================== ZITIER-PFLICHT (NEU) ====================
+    CITATION_REQUIRED_FOR_RANKS = ["Junior"]  # Pflicht für diese Ränge
+    CITATION_BONUS_FOR_RANKS = ["Senior", "Experte", "Master"]  # Bonus für diese Ränge
+    CITATION_PENALTY = 1  # Punkteabzug pro fehlendem Zitat
     
     # ==================== SIMULATION ====================
     MAX_AGENTS = 500
@@ -140,8 +163,14 @@ class Config:
             cls.EXPORTS_FOLDER,
             cls.MEMORY_FOLDER,
             cls.KNOWLEDGE_FOLDER,
-            cls.PLUGINS_FOLDER
+            cls.PLUGINS_FOLDER,
+            cls.PROJECTS_FOLDER  # NEU
         ]
+        
+        # Plugin-Unterordner (NEU)
+        for cat in cls.PLUGIN_CATEGORIES:
+            folders.append(os.path.join(cls.PLUGINS_FOLDER, cat))
+        
         for folder in folders:
             os.makedirs(folder, exist_ok=True)
 
